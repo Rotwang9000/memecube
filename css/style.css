@@ -1,0 +1,209 @@
+/* Base styles */
+* {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+body {
+	font-family: 'Arial', sans-serif;
+	background-color: #000;
+	color: #fff;
+	overflow: hidden;
+}
+
+/* Container for the Three.js canvas */
+#container {
+	position: fixed;
+	top: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+}
+
+#canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+/* UI Elements */
+#ui-overlay {
+	position: absolute;
+	width: 100%;
+	height: 100%;
+	pointer-events: none; /* Allow clicks to pass through to canvas */
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
+	padding: 20px;
+}
+
+#info-panel {
+	pointer-events: auto;
+	background-color: rgba(0, 0, 0, 0.7);
+	padding: 15px;
+	border-radius: 8px;
+	max-width: 300px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+#info-panel h1 {
+	font-size: 24px;
+	margin-bottom: 10px;
+	color: #0ff;
+}
+
+#submission-form {
+	pointer-events: auto;
+	position: absolute;
+	top: 20px;
+	right: 20px;
+	background-color: rgba(0, 0, 0, 0.7);
+	padding: 20px;
+	border-radius: 8px;
+	width: 300px;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.form-group {
+	margin-bottom: 15px;
+}
+
+label {
+	display: block;
+	margin-bottom: 5px;
+	color: #0ff;
+}
+
+input {
+	width: 100%;
+	padding: 8px;
+	background-color: rgba(0, 30, 60, 0.8);
+	border: 1px solid rgba(0, 255, 255, 0.3);
+	border-radius: 4px;
+	color: white;
+}
+
+button {
+	background-color: #0ff;
+	color: #000;
+	border: none;
+	padding: 10px 15px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-weight: bold;
+	transition: all 0.3s ease;
+}
+
+button:hover {
+	background-color: #00ccff;
+	transform: scale(1.05);
+}
+
+#controls-help {
+	pointer-events: auto;
+	background-color: rgba(0, 0, 0, 0.7);
+	padding: 10px;
+	border-radius: 8px;
+	text-align: center;
+	margin-top: auto;
+	border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* Loading indicator */
+.loading {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	background-color: rgba(0, 0, 0, 0.8);
+	padding: 20px;
+	border-radius: 8px;
+	z-index: 100;
+	border: 1px solid rgba(0, 255, 255, 0.5);
+}
+
+/* Animation for new tag submission */
+@keyframes tagSubmit {
+	0% { transform: scale(0); opacity: 0; }
+	50% { transform: scale(1.2); opacity: 1; }
+	100% { transform: scale(1); opacity: 1; }
+}
+
+.tag-submit-animation {
+	animation: tagSubmit 0.5s ease-out;
+}
+
+/* DexScreener token list styles */
+#token-list-modal {
+	color: white;
+	font-family: 'Arial', sans-serif;
+}
+
+#token-list-modal table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 15px;
+	color: white;
+}
+
+#token-list-modal th {
+	text-align: left;
+	padding: 8px;
+	border-bottom: 1px solid rgba(0, 255, 255, 0.3);
+	color: #0ff;
+	font-weight: bold;
+}
+
+#token-list-modal td {
+	padding: 8px;
+	border-bottom: 1px solid rgba(0, 10, 20, 0.3);
+}
+
+#token-list-modal tr:nth-child(even) {
+	background-color: rgba(0, 30, 60, 0.3);
+}
+
+#token-list-modal tr:hover {
+	background-color: rgba(0, 80, 120, 0.3);
+}
+
+#token-list-modal button {
+	background-color: #0ff;
+	color: #000;
+	border: none;
+	padding: 4px 8px;
+	border-radius: 4px;
+	cursor: pointer;
+	font-weight: bold;
+	font-size: 12px;
+	transition: all 0.2s ease;
+}
+
+#token-list-modal button:hover {
+	background-color: #00ccff;
+	transform: scale(1.05);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+	#submission-form {
+		width: calc(100% - 40px);
+		max-width: 400px;
+	}
+	
+	#info-panel {
+		max-width: 100%;
+	}
+	
+	#token-list-modal {
+		width: 95%;
+		max-width: none;
+	}
+	
+	#token-list-modal th:nth-child(4),
+	#token-list-modal td:nth-child(4) {
+		display: none; /* Hide chain column on mobile */
+	}
+} 

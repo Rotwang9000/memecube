@@ -1,0 +1,25 @@
+{
+	"name": "memecube",
+	"version": "0.1.0",
+	"description": "Interactive 3D cube of meme coin tags in space",
+	"main": "server.js",
+	"scripts": {
+		"start": "node server.js",
+		"dev": "nodemon server.js"
+	},
+	"keywords": [
+		"threejs",
+		"3d",
+		"cryptocurrency",
+		"memecoin",
+		"interactive"
+	],
+	"author": "",
+	"license": "MIT",
+	"dependencies": {
+		"http-server": "^14.1.1"
+	},
+	"devDependencies": {
+		"nodemon": "^3.0.1"
+	}
+} 
