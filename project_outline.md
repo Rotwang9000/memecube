@@ -25,11 +25,19 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
 - `/index.html` - Main entry point
 - `/css/style.css` - Styling
 - `/js/main.js` - Application initialization and demo mode
-- `/js/scene.js` - Three.js scene setup and lighting management
-- `/js/tags.js` - Tag management, grid system, and animations
-- `/js/controls.js` - Camera and user interaction
-- `/js/utils.js` - Utility functions
-- `/js/dex-screener.js` - DexScreener API integration and token display
+- `/js/core/scene.js` - Three.js scene setup and lighting management
+- `/js/interactions/tags.js` - Tag management, grid system, and animations
+- `/js/core/controls.js` - Camera and user interaction
+- `/js/utils/utils.js` - Utility functions
+- `/js/data-processors/` - Data processing modules for API integration
+  - `/js/data-processors/DataProcessor.js` - Generic data processor base class
+  - `/js/data-processors/DexScreenerProcessor.js` - DexScreener implementation
+  - `/js/data-processors/CoinGeckoProcessor.js` - Sample CoinGecko implementation
+- `/js/ui/DexScreenerManager.js` - UI management for token data
+- `/js/visualizations/` - 3D visualizations
+  - `/js/visualizations/token-scoreboard.js` - LED scoreboard for token data
+  - `/js/visualizations/token-chart-3d.js` - 3D chart visualization
+  - `/js/visualizations/token-cube.js` - Token cube visualization
 
 ## Development Phases
 1. Basic setup and space environment creation

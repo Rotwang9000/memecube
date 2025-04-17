@@ -17,6 +17,8 @@ export class DexScreenerManager {
 		this.modalElement = null;
 		this.showVisualizations = true;
 		this.utils = new Utils();
+		this.lastCameraMoving = false;
+		this.lastCameraMovingTimestamp = null;
 		
 		// Initialize the data processor
 		this.dataProcessor = new DexScreenerProcessor();
@@ -58,6 +60,7 @@ export class DexScreenerManager {
 		// Force update the visualizations to ensure they're properly positioned
 		if (this.tokenScoreboard) {
 			this.tokenScoreboard.isVisible = true;
+			console.log("Setting token scoreboard to visible");
 			this.tokenScoreboard.updateScreenPosition();
 		}
 		
@@ -171,10 +174,12 @@ export class DexScreenerManager {
 		
 		cubeButton.onclick = async () => {
 			// Refresh token data and update cube
-			const tokenData = await this.dataProcessor.refreshAllTokenData();
-			if (this.tokenCube && tokenData.length > 0) {
-				this.tokenCube.updateTokens(tokenData);
-				this.utils.showTemporaryMessage(`Updated token cube with ${tokenData.length} tokens!`);
+			if (this.dataProcessor) {
+				const tokenData = await this.dataProcessor.refreshAllTokenData();
+				if (this.tokenCube && tokenData.length > 0) {
+					this.tokenCube.updateTokens(tokenData);
+					this.utils.showTemporaryMessage(`Updated token cube with ${tokenData.length} tokens!`);
+				}
 			}
 		};
 		
@@ -517,22 +522,41 @@ export class DexScreenerManager {
 	}
 	
 	/**
-	 * Update manager on each frame
-	 * @param {number} deltaTime Time since last frame
+	 * Update visualizations
+	 * @param {number} deltaTime Time since last update
+	 * @param {boolean} isCameraMoving Whether the camera is currently moving
 	 */
-	update(deltaTime) {
-		// Update all visualizations
+	update(deltaTime, isCameraMoving) {
+		// Only update visualizations if they're visible
+		if (!this.showVisualizations) return;
+		
+		// Update token scoreboard
+		if (this.tokenScoreboard) {
+			// Only call updateScreenPosition when camera movement starts or stops
+			if (isCameraMoving !== this.lastCameraMoving || (isCameraMoving && this.lastCameraMovingTimestamp && (Date.now() - this.lastCameraMovingTimestamp) > 5000)) {
+				console.log("Camera movement state changed:", isCameraMoving ? "moving" : "stopped", this.lastCameraMovingTimestamp, Date.now());
+				this.lastCameraMovingTimestamp = Date.now();
+				this.tokenScoreboard.updateScreenPosition();
+			}
+			this.tokenScoreboard.update(deltaTime);
+		}
+		
+		// Update token chart
+		if (this.tokenChart) {
+			// Only call updateScreenPosition when camera movement starts or stops
+			if (isCameraMoving !== this.lastCameraMoving) {
+				this.tokenChart.updateScreenPosition();
+			}
+			this.tokenChart.update(deltaTime);
+		}
+		
+		// Update token cube
 		if (this.tokenCube) {
 			this.tokenCube.update(deltaTime);
 		}
 		
-		if (this.tokenScoreboard) {
-			this.tokenScoreboard.update(deltaTime);
-		}
-		
-		if (this.tokenChart) {
-			this.tokenChart.update(deltaTime);
-		}
+		// Store camera movement state for next comparison
+		this.lastCameraMoving = isCameraMoving;
 	}
 	
 	/**

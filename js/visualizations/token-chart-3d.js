@@ -94,7 +94,6 @@ export class TokenChart3D {
 			}),
 			emitter: new THREE.MeshBasicMaterial({
 				color: 0x44ffff,
-				emissive: 0x44ffff,
 				transparent: true,
 				opacity: 0.9,
 				blending: THREE.AdditiveBlending

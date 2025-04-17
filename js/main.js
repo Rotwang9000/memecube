@@ -19,6 +19,8 @@ class MemeCube {
 		this.lastTime = 0;
 		this.raycaster = new THREE.Raycaster();
 		this.mouse = new THREE.Vector2();
+		this.lastCameraPosition = null;
+		this.lastCameraQuaternion = null;
 		
 		// Sample initial tags for demo purposes
 		this.initialTags = [
@@ -49,6 +51,9 @@ class MemeCube {
 		for (const tag of this.initialTags) {
 			await this.tagsManager.addTag(tag.text, tag.url, tag.size);
 		}
+		
+		// Initialize tag age system to enable shrinking and inward movement
+		this.tagsManager.initializeTagAgeSystem();
 		
 		// Set up form submission
 		this.setupFormSubmission();
@@ -88,11 +93,14 @@ class MemeCube {
 		this.dexScreenerManager.createTokenListUI();
 		
 		// Fetch initial token data
-		await this.dexScreenerManager.refreshAllTokenData();
+		if (this.dexScreenerManager.dataProcessor) {
+			await this.dexScreenerManager.dataProcessor.refreshAllTokenData();
+		}
 		
 		// Ensure visualizations are visible
 		if (this.dexScreenerManager.tokenScoreboard) {
 			this.dexScreenerManager.tokenScoreboard.isVisible = true;
+			console.log("Initializing token scoreboard");
 			this.dexScreenerManager.tokenScoreboard.updateScreenPosition();
 		}
 		
@@ -304,7 +312,7 @@ class MemeCube {
 			}
 			
 			// Update scoreboard
-			if (this.dexScreenerManager.tokenScoreboard) {
+			if (this.dexScreenerManager.tokenScoreboard && this.dexScreenerManager.tokenData ) {
 				// Create an array with the demo token and a few more if available
 				const displayTokens = [demoToken];
 				
@@ -326,10 +334,14 @@ class MemeCube {
 			
 			// Add token to cube
 			const tokenSymbol = demoToken.baseToken?.symbol || demoToken.tokenAddress?.substring(0, 8) || 'DEMO';
+			
+			// Calculate size but ensure it's visible
+			const tokenSize = Math.max(0.6, this.dexScreenerManager.calculateTokenSize(demoToken));
+			
 			await this.tagsManager.addTag(
 				tokenSymbol,
 				demoToken.url || '#',
-				this.dexScreenerManager.calculateTokenSize(demoToken)
+				tokenSize
 			);
 			
 			this.utils.showTemporaryMessage(`Showing demo token: ${tokenSymbol}`);
@@ -347,8 +359,20 @@ class MemeCube {
 		
 		// Add a random tag every 3-6 seconds
 		this.demoInterval = setInterval(async () => {
+			// Generate a random tag
 			const randomTag = this.tagsManager.generateRandomTag();
-			await this.tagsManager.addTag(randomTag.text, randomTag.url, randomTag.size);
+			
+			// Add it to the cube - ensure it's visible by setting a minimum size
+			const size = Math.max(0.5, randomTag.size);
+			await this.tagsManager.addTag(randomTag.text, randomTag.url, size);
+			
+			// Limit the total number of tags to prevent overcrowding
+			if (this.tagsManager.tags.length > 40) {
+				// Remove the oldest tag
+				const oldestTag = this.tagsManager.tags[0];
+				this.tagsManager.coreGroup.remove(oldestTag.mesh);
+				this.tagsManager.tags.shift();
+			}
 		}, 3000 + Math.random() * 3000);
 	}
 	
@@ -382,8 +406,40 @@ class MemeCube {
 			return; // Interaction was handled by visualizations
 		}
 		
-		// Handle clicks on cube tags here if not caught by visualizations
-		// (existing interaction handling in tagsManager if any)
+		// Handle clicks on cube tags
+		// Cast ray and check for intersections with tag meshes
+		const intersects = this.raycaster.intersectObjects(
+			this.tagsManager.coreGroup.children, true
+		);
+		
+		if (intersects.length > 0) {
+			// Check if we clicked on a tag by going up the parent chain
+			let object = intersects[0].object;
+			let tag = null;
+			
+			// Find the tag this mesh belongs to
+			for (const t of this.tagsManager.tags) {
+				if (t.mesh === object || t.mesh.children.includes(object)) {
+					tag = t;
+					break;
+				}
+			}
+			
+			// If we found a tag, open its URL
+			if (tag && tag.url) {
+				// Show a visual feedback that tag was clicked
+				const scaleFactor = 1.2;
+				tag.mesh.scale.set(scaleFactor, scaleFactor, scaleFactor);
+				
+				// Return to normal scale after a short delay
+				setTimeout(() => {
+					tag.mesh.scale.set(1, 1, 1);
+				}, 300);
+				
+				// Open URL in a new tab
+				window.open(tag.url, '_blank');
+			}
+		}
 	}
 	
 	animate() {
@@ -394,18 +450,35 @@ class MemeCube {
 		const deltaTime = currentTime - this.lastTime;
 		this.lastTime = currentTime;
 		
+		// Get current camera state
+		const currentCameraPosition = this.scene.camera.position.clone();
+		const currentCameraQuaternion = this.scene.camera.quaternion.clone();
+		
+		// Check if camera moved since last frame
+		const isCameraMoving = this.lastCameraPosition && (
+			!this.lastCameraPosition.equals(currentCameraPosition) ||
+			!this.lastCameraQuaternion.equals(currentCameraQuaternion)
+		);
+		
+		// Only update the stored camera state if it actually changed
+		// This ensures we maintain a stable reference point for future comparisons
+		if (isCameraMoving || !this.lastCameraPosition) {
+			this.lastCameraPosition = currentCameraPosition;
+			this.lastCameraQuaternion = currentCameraQuaternion;
+		}
+		
 		// Update scene
 		this.scene.update();
 		
 		// Update tags
-		this.tagsManager.update();
+		this.tagsManager.update(deltaTime);
 		
 		// Update controls
 		this.controls.update();
 		
-		// Update DexScreener visualizations
+		// Update DexScreener visualizations with camera movement info
 		if (this.dexScreenerManager) {
-			this.dexScreenerManager.update(deltaTime);
+			this.dexScreenerManager.update(deltaTime, isCameraMoving);
 		}
 	}
 }

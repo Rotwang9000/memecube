@@ -19,8 +19,13 @@ export class Scene {
 		this.renderer.setSize(window.innerWidth, window.innerHeight);
 		this.renderer.setClearColor(0x000000, 1);
 		
-		// Enable physically correct lighting for better metallic appearance
-		this.renderer.physicallyCorrectLights = true;
+		// Enable high dynamic range
+		this.renderer.outputEncoding = THREE.sRGBEncoding;
+		this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+		this.renderer.toneMappingExposure = 1.0;
+		
+		// Update to modern lighting model (replacing deprecated physicallyCorrectLights)
+		this.renderer.useLegacyLights = false;
 		
 		// Camera setup
 		this.camera = new THREE.PerspectiveCamera(
@@ -38,7 +43,7 @@ export class Scene {
 		// Load environment map for reflections
 		this.setupEnvironmentMap();
 		
-		// Space background
+		// Create immersive space background
 		this.createSpaceBackground();
 		
 		// Handle window resize
@@ -71,63 +76,175 @@ export class Scene {
 	}
 	
 	createSpaceBackground() {
-		// Create stars
-		const starsGeometry = new THREE.BufferGeometry();
-		const starsMaterial = new THREE.PointsMaterial({
-			color: 0xffffff,
-			size: 0.2,
-			transparent: true
-		});
+		// Create stars with different sizes and colors
+		this.createStarLayers();
 		
-		const starsVertices = [];
-		const starsCount = 2000;
-		const starsRadius = 100;
+		// Create nebula effect with particle clouds
+		this.createNebulaEffect();
+	}
+	
+	createStarLayers() {
+		// Create multiple layers of stars with different properties
+		const starLayers = [
+			{ count: 2500, radius: 150, size: 0.15, color: 0xffffff, opacity: 0.8 },
+			{ count: 1500, radius: 120, size: 0.3, color: 0xccccff, opacity: 0.9 },
+			{ count: 800, radius: 100, size: 0.4, color: 0xffffcc, opacity: 1.0 },
+			{ count: 300, radius: 80, size: 0.5, color: 0xffcccc, opacity: 1.0 }
+		];
 		
-		for (let i = 0; i < starsCount; i++) {
-			const x = THREE.MathUtils.randFloatSpread(starsRadius * 2);
-			const y = THREE.MathUtils.randFloatSpread(starsRadius * 2);
-			const z = THREE.MathUtils.randFloatSpread(starsRadius * 2);
+		this.starLayers = [];
+		
+		starLayers.forEach(layer => {
+			const starsGeometry = new THREE.BufferGeometry();
 			
-			// Keep a minimum distance from the center to avoid stars intersecting with the cube
-			const distance = Math.sqrt(x*x + y*y + z*z);
-			if (distance < 15) {
-				// Move star further out
-				const direction = new THREE.Vector3(x, y, z).normalize();
-				const newDistance = 15 + Math.random() * 10;
-				const newPos = direction.multiplyScalar(newDistance);
-				starsVertices.push(newPos.x, newPos.y, newPos.z);
-			} else {
-				starsVertices.push(x, y, z);
+			// Create star material with custom shader for twinkling effect
+			const starsMaterial = new THREE.PointsMaterial({
+				size: layer.size,
+				color: layer.color,
+				transparent: true,
+				opacity: layer.opacity,
+				blending: THREE.AdditiveBlending,
+				map: this.createStarTexture(),
+				depthWrite: false
+			});
+			
+			const starsVertices = [];
+			const starsColors = [];
+			
+			// Create random color variations
+			const baseColor = new THREE.Color(layer.color);
+			
+			for (let i = 0; i < layer.count; i++) {
+				// Create random position in spherical space
+				const x = THREE.MathUtils.randFloatSpread(layer.radius * 2);
+				const y = THREE.MathUtils.randFloatSpread(layer.radius * 2);
+				const z = THREE.MathUtils.randFloatSpread(layer.radius * 2);
+				
+				// Keep a minimum distance from the center to avoid stars intersecting with the cube
+				const distance = Math.sqrt(x*x + y*y + z*z);
+				if (distance < 15) {
+					// Move star further out
+					const direction = new THREE.Vector3(x, y, z).normalize();
+					const newDistance = 15 + Math.random() * 10;
+					const newPos = direction.multiplyScalar(newDistance);
+					starsVertices.push(newPos.x, newPos.y, newPos.z);
+				} else {
+					starsVertices.push(x, y, z);
+				}
+				
+				// Add slight color variation
+				const colorVar = new THREE.Color(baseColor);
+				colorVar.r += (Math.random() - 0.5) * 0.2;
+				colorVar.g += (Math.random() - 0.5) * 0.2;
+				colorVar.b += (Math.random() - 0.5) * 0.2;
+				starsColors.push(colorVar.r, colorVar.g, colorVar.b);
 			}
-		}
-		
-		starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
-		this.stars = new THREE.Points(starsGeometry, starsMaterial);
-		this.scene.add(this.stars);
-		
-		// Create a subtle glow/fog in the background for a more space-like feel
-		const particlesGeometry = new THREE.BufferGeometry();
-		const particlesCnt = 500;
-		const posArray = new Float32Array(particlesCnt * 3);
-		
-		for(let i = 0; i < particlesCnt * 3; i++) {
-			// Create particles further out than stars
-			posArray[i] = (Math.random() - 0.5) * 200;
-		}
-		
-		particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-		
-		const particlesMaterial = new THREE.PointsMaterial({
-			size: 0.5,
-			color: 0x0055aa,
-			transparent: true,
-			opacity: 0.2,
-			blending: THREE.AdditiveBlending
+			
+			starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starsVertices, 3));
+			starsGeometry.setAttribute('color', new THREE.Float32BufferAttribute(starsColors, 3));
+			
+			// Update material to use vertex colors
+			starsMaterial.vertexColors = true;
+			
+			const stars = new THREE.Points(starsGeometry, starsMaterial);
+			this.scene.add(stars);
+			this.starLayers.push(stars);
 		});
+	}
+	
+	createStarTexture() {
+		// Create a custom texture for stars with a soft glow
+		const canvas = document.createElement('canvas');
+		canvas.width = 32;
+		canvas.height = 32;
 		
-		const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
-		this.scene.add(particlesMesh);
-		this.particlesMesh = particlesMesh; // Store for animation
+		const ctx = canvas.getContext('2d');
+		const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+		gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+		gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.8)');
+		gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.3)');
+		gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+		
+		ctx.fillStyle = gradient;
+		ctx.fillRect(0, 0, 32, 32);
+		
+		const texture = new THREE.CanvasTexture(canvas);
+		texture.needsUpdate = true;
+		return texture;
+	}
+	
+	createNebulaEffect() {
+		// Create nebula effect with colored particle clouds
+		const nebulaColors = [
+			new THREE.Color(0x3333ff).multiplyScalar(0.5), // Blue
+			new THREE.Color(0xff3366).multiplyScalar(0.5), // Pink/Red
+			new THREE.Color(0x33ccff).multiplyScalar(0.5)  // Cyan
+		];
+		
+		this.nebulaClouds = [];
+		
+		nebulaColors.forEach((color, index) => {
+			const particlesGeometry = new THREE.BufferGeometry();
+			const particlesCnt = 800;
+			const posArray = new Float32Array(particlesCnt * 3);
+			
+			// Distribute particles in a shell-like layer to create depth
+			const shellRadius = 80 + index * 20;
+			const shellThickness = 30;
+			
+			for(let i = 0; i < particlesCnt; i++) {
+				// Create particles in a spherical shell with some random distribution
+				const phi = Math.random() * Math.PI * 2;
+				const theta = Math.random() * Math.PI;
+				const r = shellRadius + (Math.random() - 0.5) * shellThickness;
+				
+				// Convert spherical to cartesian coordinates
+				const x = r * Math.sin(theta) * Math.cos(phi);
+				const y = r * Math.sin(theta) * Math.sin(phi);
+				const z = r * Math.cos(theta);
+				
+				posArray[i * 3] = x;
+				posArray[i * 3 + 1] = y;
+				posArray[i * 3 + 2] = z;
+			}
+			
+			particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+			
+			const particlesMaterial = new THREE.PointsMaterial({
+				size: 3.0,
+				color: color,
+				transparent: true,
+				opacity: 0.15,
+				blending: THREE.AdditiveBlending,
+				depthWrite: false,
+				map: this.createNebulaTexture()
+			});
+			
+			const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+			this.scene.add(particlesMesh);
+			this.nebulaClouds.push(particlesMesh);
+		});
+	}
+	
+	createNebulaTexture() {
+		// Create a soft, cloudy texture for nebula particles
+		const canvas = document.createElement('canvas');
+		canvas.width = 64;
+		canvas.height = 64;
+		
+		const ctx = canvas.getContext('2d');
+		const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+		gradient.addColorStop(0, 'rgba(255, 255, 255, 0.5)');
+		gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.3)');
+		gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.1)');
+		gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+		
+		ctx.fillStyle = gradient;
+		ctx.fillRect(0, 0, 64, 64);
+		
+		const texture = new THREE.CanvasTexture(canvas);
+		texture.needsUpdate = true;
+		return texture;
 	}
 	
 	updateCameraDistance(distance) {
@@ -150,16 +267,21 @@ export class Scene {
 	}
 	
 	update() {
-		// Rotate the stars slightly for a subtle space effect
-		if (this.stars) {
-			this.stars.rotation.y += 0.0001;
-			this.stars.rotation.x += 0.00005;
+		// Animate star layers for twinkling effect
+		if (this.starLayers) {
+			this.starLayers.forEach((stars, index) => {
+				const speed = 0.0001 * (index + 1);
+				stars.rotation.y += speed;
+				stars.rotation.x += speed * 0.5;
+			});
 		}
 		
-		// Animate the particle mesh for a subtle nebula-like effect
-		if (this.particlesMesh) {
-			this.particlesMesh.rotation.y -= 0.0002;
-			this.particlesMesh.rotation.x -= 0.0001;
+		// Animate nebula clouds for subtle movement
+		if (this.nebulaClouds) {
+			this.nebulaClouds.forEach((cloud, index) => {
+				cloud.rotation.y -= 0.0002 * (index * 0.5 + 1);
+				cloud.rotation.x -= 0.0001 * (index * 0.5 + 1);
+			});
 		}
 		
 		// Render the scene
@@ -245,6 +367,5 @@ export class Scene {
 		
 		// Set the environment map for the scene
 		this.scene.environment = cubeRenderTarget.texture;
-		this.scene.background = this.scene.background; // Keep existing background
 	}
 } 

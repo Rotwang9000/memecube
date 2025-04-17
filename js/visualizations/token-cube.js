@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { Utils } from './utils.js';
+import { Utils } from '../utils/utils.js';
 
 /**
  * TokenCube - Visualizes tokens from DexScreener in a 3D cube
@@ -38,6 +38,11 @@ export class TokenCube {
 	 * Create a wireframe cube to define the token space
 	 */
 	createCubeWireframe() {
+		// Disable the token cube wireframe since we're using the tags wireframe
+		// Keep the function but don't create the wireframe
+		this.wireframe = null;
+		
+		/*
 		const geometry = new THREE.BoxGeometry(this.cubeSize, this.cubeSize, this.cubeSize);
 		const material = new THREE.LineBasicMaterial({ 
 			color: 0x3366aa, 
@@ -50,6 +55,7 @@ export class TokenCube {
 		);
 		this.cubeGroup.add(wireframe);
 		this.wireframe = wireframe;
+		*/
 	}
 	
 	/**
@@ -356,11 +362,7 @@ export class TokenCube {
 			}
 		}
 		
-		// Make the cube rotate slowly
-		if (this.wireframe) {
-			this.wireframe.rotation.y += deltaTime * 0.05;
-			this.wireframe.rotation.x += deltaTime * 0.03;
-		}
+		// Wireframe rotation is now managed by the TagsManager
 	}
 	
 	/**
@@ -371,5 +373,52 @@ export class TokenCube {
 	easeAnimation(t) {
 		// Cubic ease out
 		return 1 - Math.pow(1 - t, 3);
+	}
+
+	/**
+	 * Handle interaction with token cube elements
+	 * @param {THREE.Raycaster} raycaster - Raycaster for interaction
+	 * @returns {boolean} Whether interaction occurred
+	 */
+	handleInteraction(raycaster) {
+		// Early return if cube is not visible
+		if (!this.cubeGroup.visible) return false;
+		
+		// Create an array of all token meshes to check for intersection
+		const tokenMeshArray = Object.values(this.tokenMeshes);
+		
+		// Check for intersections with token meshes
+		const intersects = raycaster.intersectObjects(tokenMeshArray, false);
+		
+		if (intersects.length > 0) {
+			// Get the first intersected object
+			const intersectedObject = intersects[0].object;
+			
+			// Find the token that corresponds to this mesh
+			const token = this.tokens.find(token => 
+				this.tokenMeshes[token.symbol] === intersectedObject
+			);
+			
+			if (token) {
+				// Create a highlight effect on the selected token
+				const originalColor = intersectedObject.material.color.clone();
+				intersectedObject.material.emissiveIntensity = 1.0;
+				intersectedObject.scale.multiplyScalar(1.2);
+				
+				// Show token info as a temporary message
+				const message = `${token.symbol}: Market Cap $${this.utils.numberWithCommas(token.marketCap || 0)}`;
+				this.utils.showTemporaryMessage(message);
+				
+				// Reset the highlight after a short delay
+				setTimeout(() => {
+					intersectedObject.material.emissiveIntensity = 0.3;
+					intersectedObject.scale.set(1, 1, 1);
+				}, 1000);
+				
+				return true;
+			}
+		}
+		
+		return false;
 	}
 } 

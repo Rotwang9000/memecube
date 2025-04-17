@@ -15,17 +15,24 @@ export class TokenScoreboard {
 		this.expanded = false;
 		this.updateInterval = 30000; // Update every 30 seconds
 		this.lastUpdateTime = 0;
+		this.isMoving = false;
+		this.movementStartTime = 0;
+		this.movementDuration = 1000; // Duration of flight animation in ms
+		this.movementStartQuaternion = new THREE.Quaternion();
+		this.targetQuaternion = new THREE.Quaternion();
+		
+		this.updateScreenPositionTimeout = null;
 		
 		// Fixed screen position (left corner - moved more to the right and up)
 		this.screenPosition = { x: -0.6, y: -0.7 }; // Adjusted from -0.8, -0.8
 		
 		// Scoreboard dimensions (smaller size to fit better)
 		this.width = 15;
-		this.height = 8;
-		this.dotSize = 0.05;  // Size of each LED dot
-		this.dotSpacing = 0.1; // Spacing between dots
-		this.dotRows = 32;    // Number of dot rows
-		this.dotCols = 64;    // Number of dot columns
+		this.height = 8; // Increased height from 8 to 9 to prevent cut-off
+		this.dotSize = 0.15;  // Size of each LED dot
+		this.dotSpacing = 0.2; // Spacing between dots
+		this.dotRows = 38;    // Number of dot rows
+		this.dotCols = 90;    // Number of dot columns
 		
 		// Token display settings
 		this.maxTokensToShow = 5;
@@ -41,12 +48,12 @@ export class TokenScoreboard {
 		
 		// LED colors
 		this.colors = {
-			red: new THREE.Color(0xff3030),
-			green: new THREE.Color(0x30ff30),
-			blue: new THREE.Color(0x3030ff),
-			yellow: new THREE.Color(0xffff30),
-			cyan: new THREE.Color(0x30ffff),
-			magenta: new THREE.Color(0xff30ff),
+			red: new THREE.Color(0xff0000),
+			green: new THREE.Color(0x00ff00),
+			blue: new THREE.Color(0x0000ff),
+			yellow: new THREE.Color(0xffff00),
+			cyan: new THREE.Color(0x00ffff),
+			magenta: new THREE.Color(0xff00ff),
 			white: new THREE.Color(0xffffff),
 			off: new THREE.Color(0x202020)
 		};
@@ -68,6 +75,7 @@ export class TokenScoreboard {
 		// Add to scene
 		this.scene.add(this.scoreboardGroup);
 		
+		console.log("Token scoreboard created");
 		// Update position initially
 		this.updateScreenPosition();
 		this.lastPosition.copy(this.scoreboardGroup.position);
@@ -87,24 +95,37 @@ export class TokenScoreboard {
 			color: 0x444444,
 			metalness: 0.8,
 			roughness: 0.2,
+			opacity: 0.1, // 90% transparency
+
 		});
 		
 		const frame = new THREE.Mesh(frameGeometry, frameMaterial);
 		frame.position.z = -0.2;
-		this.scoreboardGroup.add(frame);
+		//this.scoreboardGroup.add(frame);
 		
-		// Create display background (black)
-		const displayGeometry = new THREE.BoxGeometry(this.width, this.height, 0.1);
-		const displayMaterial = new THREE.MeshStandardMaterial({
+		// Create display background (completely black with high transparency)
+		const displayGeometry = new THREE.BoxGeometry(this.width, this.height * 1.1, 0.1);
+		const displayMaterial = new THREE.MeshBasicMaterial({
 			color: 0x000000,
-			metalness: 0.5,
-			roughness: 0.2,
-			emissive: 0x111111,
+			transparent: true,
 		});
 		
 		const display = new THREE.Mesh(displayGeometry, displayMaterial);
 		display.position.z = -0.05;
-		this.scoreboardGroup.add(display);
+		//this.scoreboardGroup.add(display);
+		
+		// Add a back panel to prevent seeing through the scoreboard
+		const backPanelGeometry = new THREE.PlaneGeometry(this.width + 0.5, this.height + 0.5);
+		const backPanelMaterial = new THREE.MeshBasicMaterial({
+			color: 0x000000,
+			side: THREE.BackSide,
+			transparent: false,
+			opacity: 0.1
+		});
+		
+		const backPanel = new THREE.Mesh(backPanelGeometry, backPanelMaterial);
+		backPanel.position.z = -0.25;
+		//this.scoreboardGroup.add(backPanel);
 		
 		// Add some decorative elements
 		this.addDecorativeElements();
@@ -136,54 +157,6 @@ export class TokenScoreboard {
 			this.scoreboardGroup.add(bolt);
 		});
 		
-		// Add a small "LIVE TOKENS" label at the bottom
-		const labelGeometry = new THREE.PlaneGeometry(3, 0.6);
-		const labelMaterial = new THREE.MeshStandardMaterial({
-			color: 0x222266,
-			metalness: 0.7,
-			roughness: 0.3,
-			emissive: 0x000033,
-		});
-		
-		const label = new THREE.Mesh(labelGeometry, labelMaterial);
-		label.position.set(0, -this.height/2 - 0.4, 0);
-		this.scoreboardGroup.add(label);
-		
-		// Add text to the label
-		const loader = new FontLoader();
-		loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', 
-			// Success callback
-			(font) => {
-				const textGeometry = new TextGeometry('LIVE TOKENS', {
-					font: font,
-					size: 0.3,
-					height: 0.02,
-					curveSegments: 3,
-					bevelEnabled: false
-				});
-				
-				textGeometry.computeBoundingBox();
-				const textWidth = textGeometry.boundingBox.max.x - textGeometry.boundingBox.min.x;
-				
-				const textMaterial = new THREE.MeshStandardMaterial({
-					color: 0xffffff,
-					emissive: 0x3333ff,
-					emissiveIntensity: 0.5
-				});
-				
-				const textMesh = new THREE.Mesh(textGeometry, textMaterial);
-				textMesh.position.set(-textWidth/2, -0.15, 0.01);
-				label.add(textMesh);
-			},
-			// Progress callback
-			(xhr) => {
-				console.log(`Font ${(xhr.loaded / xhr.total * 100)}% loaded`);
-			},
-			// Error callback
-			(err) => {
-				console.error('An error happened during font loading:', err);
-			}
-		);
 	}
 	
 	/**
@@ -393,11 +366,16 @@ export class TokenScoreboard {
 	 * @param {THREE.Vector3} movement - Movement vector
 	 */
 	activateJets(movement) {
-		// Normalize the movement direction
-		const moveDir = movement.clone().normalize();
+		// Ensure movement is a THREE.Vector3
+		const moveDir = movement instanceof THREE.Vector3 
+			? movement.clone().normalize() 
+			: new THREE.Vector3(0, 0, -1);
 		
 		// Record the time of last movement
 		this.lastMovementTime = performance.now();
+		
+		// Determine if this is part of an animated movement
+		const isAnimated = this.isMoving;
 		
 		// Go through each jet
 		this.jets.forEach((jet, index) => {
@@ -408,10 +386,10 @@ export class TokenScoreboard {
 			const activation = -cornerVector.dot(moveDir);
 			
 			if (activation > 0.1) {
-				// Emit new particles
-				const particleCount = Math.ceil(activation * 10);
+				// Emit new particles - more during animation
+				const particleCount = Math.ceil(activation * (isAnimated ? 20 : 10));
 				for (let i = 0; i < particleCount; i++) {
-					this.emitJetParticle(jet, moveDir, activation);
+					this.emitJetParticle(jet, moveDir.clone().multiplyScalar(-1), activation * (isAnimated ? 1.5 : 1.0));
 				}
 			}
 			
@@ -430,8 +408,8 @@ export class TokenScoreboard {
 		
 		const particle = jet.particles[particleIndex];
 		
-		// Set lifetime - make last longer for better fade
-		particle.life = 2.0 + Math.random() * 1.0;
+		// Set lifetime - make last longer for better fade and longer trails during animation
+		particle.life = 2.0 + Math.random() * 1.0 + (intensity > 1.0 ? 1.0 : 0);
 		particle.maxLife = particle.life;
 		
 		// Set initial position (at jet base with small random offset)
@@ -441,7 +419,11 @@ export class TokenScoreboard {
 		positions[particleIndex * 3 + 2] = jet.basePosition.z + (Math.random() - 0.5) * 0.1;
 		
 		// Set velocity - opposite to movement direction with randomness
-		const oppositeDir = moveDir.clone().multiplyScalar(-1);
+		// Ensure moveDir is a Vector3
+		const oppositeDir = moveDir instanceof THREE.Vector3 
+			? moveDir.clone() 
+			: new THREE.Vector3(0, 0, -1);
+			
 		particle.velocity.copy(oppositeDir)
 			.multiplyScalar(0.05 + Math.random() * 0.08 * intensity)
 			.add(new THREE.Vector3(
@@ -450,11 +432,16 @@ export class TokenScoreboard {
 				(Math.random() - 0.5) * 0.02
 			));
 		
-		// Update colors based on intensity
+		// Update colors based on intensity - brighter for higher intensity
 		const colors = jet.geometry.attributes.color.array;
-		colors[particleIndex * 3] = 0.2 + Math.random() * 0.3;     // R
-		colors[particleIndex * 3 + 1] = 0.5 + Math.random() * 0.5; // G
-		colors[particleIndex * 3 + 2] = 0.8 + Math.random() * 0.2; // B
+		const intensityBoost = Math.min(1.0, intensity * 0.7);
+		colors[particleIndex * 3] = 0.2 + Math.random() * 0.3 + intensityBoost * 0.3;     // R - more red for higher intensity
+		colors[particleIndex * 3 + 1] = 0.5 + Math.random() * 0.5;                        // G
+		colors[particleIndex * 3 + 2] = 0.8 + Math.random() * 0.2 - intensityBoost * 0.2; // B - less blue for higher intensity
+		
+		// Set size based on intensity
+		const sizes = jet.geometry.attributes.size.array;
+		sizes[particleIndex] = (0.03 + Math.random() * 0.05) * (1.0 + intensityBoost);
 		
 		// Set opacity to full
 		const opacities = jet.geometry.attributes.opacity.array;
@@ -463,6 +450,7 @@ export class TokenScoreboard {
 		// Mark attributes as needing update
 		jet.geometry.attributes.position.needsUpdate = true;
 		jet.geometry.attributes.color.needsUpdate = true;
+		jet.geometry.attributes.size.needsUpdate = true;
 		jet.geometry.attributes.opacity.needsUpdate = true;
 	}
 	
@@ -524,7 +512,7 @@ export class TokenScoreboard {
 	 * Create LED dot matrix display
 	 */
 	createLEDDisplay() {
-		// Container for all LED dots
+		// Container for all LED dots - position on the opposite side of the board
 		this.ledGroup = new THREE.Group();
 		this.scoreboardGroup.add(this.ledGroup);
 		
@@ -532,17 +520,18 @@ export class TokenScoreboard {
 		// Significantly increased size for better visibility
 		const dotGeometry = new THREE.CircleGeometry(0.12, 16); // More detailed circles
 		
-		// Create materials for each color state - significantly increased brightness
+		// Create materials for each color state with extreme brightness
 		this.dotMaterials = {};
 		Object.entries(this.colors).forEach(([name, color]) => {
-			// Make colors more vibrant
-			const enhancedColor = color.clone().multiplyScalar(name === 'off' ? 1 : 2.0);
+			// Make colors extremely vibrant
+			const enhancedColor = color.clone().multiplyScalar(name === 'off' ? 1 : 1);
 			
 			this.dotMaterials[name] = new THREE.MeshBasicMaterial({
 				color: enhancedColor,
-				emissive: enhancedColor,
-				emissiveIntensity: name === 'off' ? 0.1 : 3.0, // Significantly increased
-				blending: THREE.AdditiveBlending
+				transparent: false,
+				opacity: name === 'off' ? 0.05 : 1.0,
+				blending: THREE.AdditiveBlending,
+				side: THREE.DoubleSide // Make dots visible from both sides
 			});
 		});
 		
@@ -557,16 +546,16 @@ export class TokenScoreboard {
 		this.dotSpacing = Math.min(
 			totalWidth / this.dotCols,
 			totalHeight / this.dotRows
-		);
+		) * 1.3;
 		
 		// Recalculate dot size based on spacing - make dots cover almost the entire space
-		this.dotSize = this.dotSpacing * 0.95; // Increased from 0.9
+		this.dotSize = this.dotSpacing * 1.4; // Increased from 0.9
 		
 		// Calculate start positions to center the display
 		const startX = -totalWidth / 2 + this.dotSpacing / 2;
 		const startY = -totalHeight / 2 + this.dotSpacing / 2;
 		
-		// Create all LED dots
+		// Create all LED dots - position on the opposite side (negative z)
 		for (let row = 0; row < this.dotRows; row++) {
 			for (let col = 0; col < this.dotCols; col++) {
 				const dot = new THREE.Mesh(dotGeometry, this.dotMaterials.off);
@@ -574,7 +563,12 @@ export class TokenScoreboard {
 				// Position the dot
 				dot.position.x = startX + col * this.dotSpacing;
 				dot.position.y = startY + row * this.dotSpacing;
-				dot.position.z = 0.05; // Slightly in front of the display
+				
+				// Position dots on the far side of the board
+				dot.position.z = -0.3; 
+				
+				// Flip the dots to face the opposite direction
+				dot.rotation.y = Math.PI;
 				
 				// Update dot scale to match new size
 				dot.scale.set(this.dotSize, this.dotSize, 1);
@@ -591,7 +585,7 @@ export class TokenScoreboard {
 		this.ledGroup.position.set(0, 0, 0);
 		
 		// Add a glow effect behind the LED display
-		this.addLEDGlowEffect(totalWidth, totalHeight);
+		//this.addLEDGlowEffect(totalWidth, totalHeight);
 	}
 	
 	/**
@@ -600,14 +594,15 @@ export class TokenScoreboard {
 	addLEDGlowEffect(width, height) {
 		const glowGeometry = new THREE.PlaneGeometry(width * 1.02, height * 1.02);
 		const glowMaterial = new THREE.MeshBasicMaterial({
-			color: 0x001133,
+			color: 0x003366,
 			transparent: true,
-			opacity: 0.5,
-			blending: THREE.AdditiveBlending
+			opacity: 1.0,
+			blending: THREE.AdditiveBlending,
+			side: THREE.DoubleSide
 		});
 		
 		const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-		glow.position.z = -0.05; // Behind the dots
+		glow.position.z = -0.29; // Just behind the dots on the far side
 		this.ledGroup.add(glow);
 	}
 	
@@ -626,9 +621,9 @@ export class TokenScoreboard {
 		if (dot) {
 			// Add more intense effect for active dots by scaling them slightly
 			if (colorName !== 'off') {
-				dot.scale.set(this.dotSize * 1.15, this.dotSize * 1.15, 1);
+				dot.scale.set(this.dotSize * 1.2, this.dotSize * 1.2, 1);
 			} else {
-				dot.scale.set(this.dotSize, this.dotSize, 1);
+				dot.scale.set(this.dotSize * 0.8, this.dotSize * 0.8, 1);
 			}
 			
 			dot.material = this.dotMaterials[colorName] || this.dotMaterials.off;
@@ -931,7 +926,7 @@ export class TokenScoreboard {
 		
 		// Clear a rectangular area around the text
 		const textWidth = text.length * 5;
-		const textHeight = 5;
+		const textHeight = 4;
 		
 		for (let y = 0; y < textHeight; y++) {
 			for (let x = 0; x < textWidth + 1; x++) {
@@ -954,7 +949,7 @@ export class TokenScoreboard {
 			}
 			
 			// Move to next character position with extra space
-			currentCol += 5; // Increased from 4 for better readability
+			currentCol += 4; // Increased from 4 for better readability
 		}
 		
 		// Return the ending column position
@@ -966,13 +961,55 @@ export class TokenScoreboard {
 	 * @param {Array} tokens - Array of token data objects
 	 */
 	updateTokenData(tokens) {
+		// Provide sample data if no tokens are provided or array is empty
+		if (!tokens || tokens.length === 0) {
+			console.log("TokenScoreboard: No token data provided, using sample data");
+			tokens = [
+				{
+					baseToken: { symbol: 'DOGE' },
+					priceUsd: '0.1234',
+					priceChange: { h24: 5.67 }
+				},
+				{
+					baseToken: { symbol: 'PEPE' },
+					priceUsd: '0.00001234',
+					priceChange: { h24: -2.34 }
+				},
+				{
+					baseToken: { symbol: 'SHIB' },
+					priceUsd: '0.00002678',
+					priceChange: { h24: 1.23 }
+				}
+			];
+		}
+		
+		// Map and clean the data to ensure we have all required properties
 		this.displayData = tokens.slice(0, this.maxTokensToShow).map(token => {
+			const symbol = token.baseToken?.symbol || 
+				(token.tokenAddress ? token.tokenAddress.substring(0, 6) : 'UNKN');
+				
+			// Make sure price is a string or number and not null/undefined
+			let price = token.priceUsd;
+			if (price === undefined || price === null) {
+				price = "0";
+			}
+			
+			// Make sure change is a number and not null/undefined
+			let change = token.priceChange?.h24;
+			if (change === undefined || change === null) {
+				change = 0;
+			} else if (typeof change === 'string') {
+				change = parseFloat(change) || 0;
+			}
+			
 			return {
-				symbol: token.baseToken?.symbol || token.tokenAddress.substring(0, 6),
-				price: token.priceUsd || "0",
-				change: token.priceChange?.h24 || 0
+				symbol: symbol,
+				price: price,
+				change: change
 			};
 		});
+		
+		console.log("TokenScoreboard: Updated display data", this.displayData);
 		
 		// Reset scroll position
 		this.scrollPosition = 0;
@@ -992,44 +1029,69 @@ export class TokenScoreboard {
 		let currentCol = 2;
 		currentCol = this.drawText('$' + token.symbol, row, currentCol, 'cyan');
 		
-		// Add separator
-		currentCol += 2;
+		// Add separator - increase the gap between elements
+		currentCol += 4;
 		
 		// Format price (limit to sensible precision)
 		let priceText = "";
 		const price = parseFloat(token.price);
-		if (price >= 100) {
+		if (isNaN(price)) {
+			priceText = "N/A";
+		} else if (price >= 100) {
 			priceText = price.toFixed(2);
 		} else if (price >= 1) {
 			priceText = price.toFixed(4);
 		} else if (price >= 0.01) {
 			priceText = price.toFixed(6);
 		} else {
-			priceText = price.toExponential(2);
+			// For very small numbers, use more precision or scientific notation
+			if (price < 0.0000001) {
+				priceText = price.toExponential(2);
+			} else {
+				priceText = price.toFixed(8);
+			}
 		}
 		
-		// Draw price in yellow
-		currentCol = this.drawText('$' + priceText, row + 5, 2, 'yellow');
+		// Draw price in yellow - increase vertical spacing between symbol and price
+		currentCol = this.drawText('$' + priceText, row + 6, 2, 'yellow');
 		
 		// Draw change percentage
-		const change = token.change;
-		const changeColor = change >= 0 ? 'green' : 'red';
-		const changeChar = change >= 0 ? '+' : '-';
-		const changeText = changeChar + Math.abs(change).toFixed(2) + '%';
+		const change = parseFloat(token.change);
+		const changeColor = !isNaN(change) && change >= 0 ? 'green' : 'red';
+		const changeChar = !isNaN(change) && change >= 0 ? '+' : '-';
+		const changeValue = !isNaN(change) ? Math.abs(change).toFixed(2) : '0.00';
+		const changeText = changeChar + changeValue + '%';
 		
-		this.drawText(changeText, row + 5, Math.floor(this.dotCols/2) + 5, changeColor);
+		// Calculate the right-aligned position
+		const changeTextWidth = changeText.length * 6; // Approximate width of the text
+		const rightAlignedCol = this.dotCols - changeTextWidth - 8; // 2 spaces from the right edge
+		
+		this.drawText(changeText, row + 6, rightAlignedCol, changeColor);
 	}
 	
+	updateScreenPosition() {
+		console.log("Updating screen position called");
+
+		// Clear existing timeout
+		clearTimeout(this.updateScreenPositionTimeout);
+		
+		// Reset motion flag if we're re-positioning
+		this.isMoving = false;
+		
+
+		this.updateScreenPositionTimeout = setTimeout(() => {
+			this._updateScreenPosition();
+		}, 1000);
+	}
+
 	/**
 	 * Update the screen position of the scoreboard
 	 */
-	updateScreenPosition() {
+	_updateScreenPosition() {
+		console.log("Actually Updating screen position");
 		if (!this.camera) return;
 
-		// Keep track of previous position for movement detection
-		const prevPosition = this.scoreboardGroup.position.clone();
-		
-		// Calculate position directly based on field of view
+		// Calculate the target position based on field of view
 		const fov = this.camera.fov * Math.PI / 180;
 		const distance = 10; // Fixed distance from camera
 		const height = 2 * Math.tan(fov / 2) * distance;
@@ -1043,33 +1105,119 @@ export class TokenScoreboard {
 		const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
 		const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
 		
-		// Position relative to camera
-		const pos = this.camera.position.clone()
+		// Calculate target position relative to camera
+		const targetPos = this.camera.position.clone()
 			.add(forward.clone().multiplyScalar(distance))
 			.add(right.clone().multiplyScalar(this.screenPosition.x * width / 2))
 			.add(up.clone().multiplyScalar(this.screenPosition.y * height / 2));
 		
-		// Set position
-		this.scoreboardGroup.position.copy(pos);
-		
-		// Always face the camera directly to fix text orientation issues
-		// This looks directly at the camera to ensure text is readable
-		this.scoreboardGroup.lookAt(this.camera.position);
-		
-		// Correction for the lookAt method which causes text to be mirrored
-		// Rotate 180 degrees around the up vector to correct orientation
-		this.scoreboardGroup.rotateOnAxis(up, Math.PI);
-		
-		// Scale - smaller when not expanded
-		const scale = this.expanded ? 0.7 : 0.3;
-		this.scoreboardGroup.scale.set(scale, scale, scale);
+		// Store target quaternion for rotation
+		const targetQuaternion = this.camera.quaternion.clone();
 		
 		// Check if there was significant movement
-		const movement = new THREE.Vector3().subVectors(this.scoreboardGroup.position, this.lastPosition);
-		if (movement.length() > this.movementThreshold) {
-			this.activateJets(movement);
+		const movement = new THREE.Vector3().subVectors(targetPos, this.scoreboardGroup.position);
+		const significantMovement = movement.length() > this.movementThreshold;
+		
+		if (significantMovement) {
+			// Animate the movement
+			this.animateMovement(targetPos, targetQuaternion);
+			
+			// Activate jets when moving - ensure movement is safely passed as Vector3
+			this.activateJets(movement.clone());
 			this.lastPosition.copy(this.scoreboardGroup.position);
+		} else {
+			// Just set position directly for small adjustments
+			this.scoreboardGroup.position.copy(targetPos);
+			
+			// Set rotation
+			this.scoreboardGroup.quaternion.copy(targetQuaternion);
+			
+			// Add a rotation to fix the upside-down text
+			this.scoreboardGroup.rotateZ(Math.PI);
+			this.scoreboardGroup.rotateY(Math.PI); // Rotate 180° to face the camera
+			
+			// Set scale - smaller when not expanded
+			const scale = this.expanded ? 0.7 : 0.3;
+			this.scoreboardGroup.scale.set(scale, scale, scale);
 		}
+	}
+	
+	/**
+	 * Animate the scoreboard flying to a new position
+	 * @param {THREE.Vector3} targetPos - Target position to move to
+	 * @param {THREE.Quaternion} targetQuaternion - Target rotation
+	 */
+	animateMovement(targetPos, targetQuaternion) {
+		// Set flag that we're currently moving
+		this.isMoving = true;
+		this.movementStartTime = performance.now();
+		
+		// Store starting position and rotation
+		const startPosition = this.scoreboardGroup.position.clone();
+		this.movementStartQuaternion.copy(this.scoreboardGroup.quaternion);
+		this.targetQuaternion = targetQuaternion.clone();
+		
+		// Get movement direction vector for jet effects
+		const moveDir = new THREE.Vector3().subVectors(targetPos, startPosition);
+		
+		// Properly rotate target quaternion for text orientation
+		const rotZ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI);
+		const rotY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+		this.targetQuaternion.multiply(rotZ).multiply(rotY);
+		
+		// Start time for jet effect timing
+		const jetStartTime = performance.now();
+		let lastJetTime = jetStartTime;
+		
+		// Set up animation
+		const animate = (currentTime) => {
+			if (!this.isMoving) return;
+			
+			const elapsed = currentTime - this.movementStartTime;
+			const progress = Math.min(elapsed / this.movementDuration, 1);
+			
+			// Use ease-in-out function for smoother movement
+			const t = progress < 0.5
+				? 2 * progress * progress
+				: 1 - Math.pow(-2 * progress + 2, 2) / 2;
+			
+			// Interpolate position
+			this.scoreboardGroup.position.lerpVectors(startPosition, targetPos, t);
+			
+			// Interpolate rotation
+			this.scoreboardGroup.quaternion.slerpQuaternions(
+				this.movementStartQuaternion,
+				this.targetQuaternion,
+				t
+			);
+			
+			// Set scale - smaller when not expanded
+			const scale = this.expanded ? 0.7 : 0.3;
+			this.scoreboardGroup.scale.set(scale, scale, scale);
+			
+			// Continuously emit jet particles during flight
+			// But limit how often we spawn new particles to avoid overdoing it
+			if (currentTime - lastJetTime > 100) { // Emit every 100ms
+				// Calculate current velocity as a Vector3
+				const currentVelocity = new THREE.Vector3().copy(moveDir).multiplyScalar(
+					// More at beginning and end of animation
+					(progress < 0.3 || progress > 0.7) ? 0.02 : 0.01
+				);
+				this.activateJets(currentVelocity);
+				lastJetTime = currentTime;
+			}
+			
+			// Continue animation if not complete
+			if (progress < 1) {
+				requestAnimationFrame(animate);
+			} else {
+				this.isMoving = false;
+				this.lastPosition.copy(this.scoreboardGroup.position);
+			}
+		};
+		
+		// Start animation
+		requestAnimationFrame(animate);
 	}
 	
 	/**
@@ -1190,8 +1338,10 @@ export class TokenScoreboard {
 	update(deltaTime) {
 		if (!this.isVisible) return;
 		
-		// Update screen position to follow camera
-		this.updateScreenPosition();
+		// Update screen position to follow camera if not already animating
+		// if (!this.isMoving) {
+		// 	this.updateScreenPosition();
+		// }
 		
 		// Force more consistent fading by always updating jets
 		this.jets.forEach(jet => {
@@ -1206,7 +1356,7 @@ export class TokenScoreboard {
 		}
 		
 		// If no data yet, show loading message
-		if (this.displayData.length === 0) {
+		if (!this.displayData || this.displayData.length === 0) {
 			// Show "LOADING" text in bright white in the center
 			this.drawText("LOADING DATA", Math.floor(this.dotRows/2) - 2, Math.floor(this.dotCols/2) - 20, 'white');
 			
@@ -1217,13 +1367,19 @@ export class TokenScoreboard {
 			for (let i = 0; i < dotCount; i++) {
 				dots += ".";
 			}
-			this.drawText(dots, Math.floor(this.dotRows/2) + 3, Math.floor(this.dotCols/2) - 3, 'cyan');
+			this.drawText(dots, Math.floor(this.dotRows/2) * 1.2 + 3, Math.floor(this.dotCols/2) * 1.2 - 3, 'cyan');
+			
+			// Try to use the sample data if we've been loading too long (over 3 seconds)
+			if (!this._loadAttempted && time - this.lastUpdateTime > 3000) {
+				this.updateTokenData([]);  // This will use the sample data
+				this._loadAttempted = true;
+			}
 			return;
 		}
 		
-		// Draw each token's info
+		// Draw each token's info with increased vertical spacing between tokens
 		for (let i = 0; i < Math.min(this.displayData.length, 5); i++) {
-			this.drawTokenInfo(i, i * 6 + 1);
+			this.drawTokenInfo(i, i * 12);
 		}
 	}
 } 
