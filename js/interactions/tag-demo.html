@@ -4,6 +4,7 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>MemeCube Tag System Demo</title>
+	<script src="../lib/importmap.js"></script>
 	<style>
 		body {
 			margin: 0;
@@ -113,8 +114,8 @@
 	</div>
 	
 	<script type="module">
-		import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.module.js';
-		import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.132.2/examples/jsm/controls/OrbitControls.js';
+		import * as THREE from 'three';
+		import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 		import { TagSystemDemo } from './tag-system-demo.js';
 		import { runTagPhysicsTests } from './tag-physics.test.js';
 		

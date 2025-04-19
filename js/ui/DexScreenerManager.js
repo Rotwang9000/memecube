@@ -5,14 +5,15 @@
 
 import { TokenScoreboard } from '../visualizations/token-scoreboard.js';
 import { TokenChart3D } from '../visualizations/token-chart-3d.js';
-import { TokenCube } from '../visualizations/token-cube.js';
+import { TagCluster } from '../interactions/tag-cluster/tag-cluster.js';
 import { Utils } from '../utils/utils.js';
 import { DexScreenerProcessor } from '../data-processors/DexScreenerProcessor.js';
 
 export class DexScreenerManager {
-	constructor(scene = null, camera = null) {
+	constructor(scene = null, camera = null, tagsManager = null) {
 		this.scene = scene;
 		this.camera = camera;
+		this.tagsManager = tagsManager;
 		this.isModalOpen = false;
 		this.modalElement = null;
 		this.showVisualizations = true;
@@ -24,7 +25,7 @@ export class DexScreenerManager {
 		this.dataProcessor = new DexScreenerProcessor();
 		
 		// Setup 3D visualizations if scene is provided
-		if (this.scene && this.camera) {
+		if (this.scene && this.camera && this.tagsManager) {
 			this.setupVisualizations();
 		}
 		
@@ -39,7 +40,7 @@ export class DexScreenerManager {
 	}
 	
 	/**
-	 * Setup 3D visualizations (scoreboard, chart, and cube)
+	 * Setup 3D visualizations (scoreboard, chart, and tag cluster)
 	 */
 	setupVisualizations() {
 		// Create token scoreboard
@@ -48,8 +49,8 @@ export class DexScreenerManager {
 		// Create token chart
 		this.tokenChart = new TokenChart3D(this.scene, this.camera);
 		
-		// Create token cube visualization
-		this.tokenCube = new TokenCube(this.scene, this.camera);
+		// Create tag cluster visualization (replaces token cube)
+		this.tokenCube = new TagCluster(this.scene, this.camera, this.tagsManager);
 		
 		// Create UI toggle button for visualizations
 		this.createVisualizationToggle();

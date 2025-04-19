@@ -4,8 +4,25 @@ import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { TagPhysics } from './tag-physics.js';
 
 /**
- * TagManager - Handles the creation, positioning and visualization of tags
- * Integrates with the TagPhysics system for physically-based movement and positioning
+ * TagManager - Core component for tag creation, visualization and interaction
+ * 
+ * This class is responsible for:
+ * 1. Creating the 3D text meshes for tags with proper styling
+ * 2. Loading and managing fonts for text rendering
+ * 3. Handling user interactions (hover/click) with tags
+ * 4. Providing the visual representation and effects for tags
+ * 5. Integrating with TagPhysics for positioning and movement
+ * 
+ * Usage flow:
+ * - TagsManager delegates to this class for core tag operations
+ * - This class creates and manages the actual THREE.js objects
+ * - TagPhysics handles all movement and positioning calculations
+ * - This class provides methods for tag creation, resizing, and removal
+ * 
+ * Implementation notes:
+ * - Primarily concerned with the visual aspects of tags
+ * - Delegates physics calculations to TagPhysics
+ * - Handles font loading and text geometry creation
  */
 export class TagManager {
 	constructor(scene, camera) {
@@ -56,7 +73,15 @@ export class TagManager {
 	 * Load the font for text geometry
 	 */
 	loadFont() {
-		this.fontLoader.load('fonts/helvetiker_bold.typeface.json', (font) => {
+		const fontFiles = [
+			'fonts/helvetiker_bold.typeface.json',
+			'fonts/shmup.json',
+			'fonts/heysei.json',
+			'fonts/freshman.json'
+		];
+		const randomFontFile = fontFiles[Math.floor(Math.random() * fontFiles.length)];
+		
+		this.fontLoader.load(randomFontFile, (font) => {
 			this.tagStyle.font = font;
 			this.fontLoaded = true;
 			
@@ -67,7 +92,6 @@ export class TagManager {
 			}
 		});
 	}
-	
 	/**
 	 * Create a new tag and add it to the scene
 	 * @param {string} name - The tag text
@@ -81,6 +105,12 @@ export class TagManager {
 			if (!this.pendingTags) this.pendingTags = [];
 			this.pendingTags.push({name, url, options});
 			return null;
+		}
+		
+		// Ensure name is a valid string
+		if (!name || typeof name !== 'string') {
+			console.warn('Invalid tag name provided:', name);
+			name = 'UNKNOWN';
 		}
 		
 		// Add $ prefix for meme coins if not already present
@@ -146,7 +176,7 @@ export class TagManager {
 		this.tags.push(tag);
 		this.tagsByName.set(displayName, tag);
 		
-		// Initialize in physics system
+		// Initialize in physics system - properly set as new tag
 		this.physics.addNewTag(tag, this.tags);
 		
 		return tag;
@@ -186,46 +216,8 @@ export class TagManager {
 		const tag = this.tags.find(t => t.id === tagId);
 		if (!tag || !tag.mesh) return;
 		
-		// Start a smooth scale animation
-		this.animateTagResize(tag, newSize);
-	}
-	
-	/**
-	 * Smoothly animate tag resizing
-	 * @param {Object} tag - The tag to resize
-	 * @param {number} targetSize - The target size
-	 */
-	animateTagResize(tag, targetSize) {
-		// Store the original scale
-		const startSize = tag.mesh.scale.x;
-		const startTime = Date.now();
-		const duration = 1000; // 1 second animation
-		
-		// Create the animation function
-		const animate = () => {
-			const elapsed = Date.now() - startTime;
-			const progress = Math.min(1.0, elapsed / duration);
-			
-			// Use a smooth easing function
-			const eased = 1 - Math.pow(1 - progress, 3); // Cubic ease out
-			
-			// Calculate current size
-			const currentSize = startSize + (targetSize - startSize) * eased;
-			
-			// Apply the scale
-			tag.mesh.scale.set(currentSize, currentSize, currentSize);
-			
-			// Update physics
-			this.physics.handleTagResize(tag, currentSize);
-			
-			// Continue animation if not done
-			if (progress < 1.0) {
-				requestAnimationFrame(animate);
-			}
-		};
-		
-		// Start the animation
-		animate();
+		// Let physics system handle the resizing with animations
+		this.physics.handleTagResize(tag, newSize);
 	}
 	
 	/**
@@ -234,56 +226,55 @@ export class TagManager {
 	getRandomColor() {
 		// Generate colors in a pleasing range
 		const hue = Math.random() * 360;
-		const saturation = 0.7 + Math.random() * 0.3; // 70-100%
-		const lightness = 0.5 + Math.random() * 0.2; // 50-70%
+		const saturation = 0.7 + Math.random() * 0.3; // High saturation
+		const lightness = 0.5 + Math.random() * 0.2; // Moderate to bright
 		
-		// Convert HSL to RGB
-		const color = new THREE.Color().setHSL(hue/360, saturation, lightness);
-		return color;
+		// Convert HSL to hex
+		return new THREE.Color().setHSL(hue/360, saturation, lightness);
 	}
 	
 	/**
-	 * Handle mouse click events
+	 * Handle click events for tag interaction
 	 */
 	handleClick(event) {
 		// Update mouse position
 		this.updateMousePosition(event);
 		
-		// Check for tag intersections
-		const clickedTag = this.findIntersectedTag();
+		// Find intersected tag
+		const tag = this.findIntersectedTag();
 		
-		if (clickedTag) {
-			// Handle tag click (e.g. open URL)
-			window.open(clickedTag.url, '_blank');
+		if (tag) {
+			// Animate the tag
+			this.pulseTag(tag);
 			
-			// Visual feedback
-			this.pulseTag(clickedTag);
+			// Open URL
+			if (tag.url && tag.url !== '#') {
+				window.open(tag.url, '_blank');
+			}
 		}
 	}
 	
 	/**
-	 * Handle mouse move events for tag hover effects
+	 * Handle mouse movement for hover effects
 	 */
 	handleMouseMove(event) {
 		// Update mouse position
 		this.updateMousePosition(event);
 		
-		// Check for tag intersections
-		const hoveredTag = this.findIntersectedTag();
+		// Find intersected tag
+		const tag = this.findIntersectedTag();
 		
-		// Handle hover state changes
-		if (hoveredTag !== this.hoveredTag) {
-			// Reset previous hover state
-			if (this.hoveredTag && this.hoveredTag.mesh) {
+		// Update hover states
+		if (tag !== this.hoveredTag) {
+			if (this.hoveredTag) {
 				this.setTagHoverState(this.hoveredTag, false);
 			}
 			
-			// Set new hover state
-			if (hoveredTag) {
-				this.setTagHoverState(hoveredTag, true);
+			if (tag) {
+				this.setTagHoverState(tag, true);
 			}
 			
-			this.hoveredTag = hoveredTag;
+			this.hoveredTag = tag;
 		}
 	}
 	
@@ -291,23 +282,36 @@ export class TagManager {
 	 * Set tag hover visual state
 	 */
 	setTagHoverState(tag, isHovered) {
-		if (!tag || !tag.mesh || !tag.mesh.material) return;
+		if (!tag || !tag.mesh) return;
 		
 		if (isHovered) {
-			// Store original emission
-			if (!tag._originalEmissive) {
-				tag._originalEmissive = tag.mesh.material.emissive.clone();
-			}
+			// Highlight effect
+			tag.originalEmissive = tag.mesh.material.emissive.clone();
+			tag.originalEmissiveIntensity = tag.mesh.material.emissiveIntensity;
 			
-			// Enhance emissive
-			tag.mesh.material.emissive.set(0x444444);
+			// Enhance emissive for glow effect
+			tag.mesh.material.emissive.setRGB(1, 1, 1);
+			tag.mesh.material.emissiveIntensity = 0.3;
 			
-			// Change cursor
+			// Scale up slightly
+			tag.originalScale = tag.mesh.scale.x;
+			tag.mesh.scale.multiplyScalar(1.1);
+			
+			// Add cursor styling
 			document.body.style.cursor = 'pointer';
 		} else {
-			// Reset emissive
-			if (tag._originalEmissive) {
-				tag.mesh.material.emissive.copy(tag._originalEmissive);
+			// Restore original properties
+			if (tag.originalEmissive) {
+				tag.mesh.material.emissive.copy(tag.originalEmissive);
+				tag.mesh.material.emissiveIntensity = tag.originalEmissiveIntensity || 0.1;
+			}
+			
+			if (tag.originalScale) {
+				tag.mesh.scale.set(
+					tag.originalScale,
+					tag.originalScale,
+					tag.originalScale
+				);
 			}
 			
 			// Reset cursor
@@ -316,7 +320,7 @@ export class TagManager {
 	}
 	
 	/**
-	 * Update mouse position for raycasting
+	 * Update mouse position from event
 	 */
 	updateMousePosition(event) {
 		this.mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
@@ -324,19 +328,17 @@ export class TagManager {
 	}
 	
 	/**
-	 * Find the tag currently under the mouse cursor
+	 * Find tag under the mouse cursor
 	 */
 	findIntersectedTag() {
-		// Update the raycaster
 		this.raycaster.setFromCamera(this.mouse, this.camera);
 		
-		// Get all meshes
-		const meshes = this.tags.map(tag => tag.mesh).filter(mesh => mesh);
+		// Get all tag meshes
+		const meshes = this.tags.map(tag => tag.mesh).filter(Boolean);
 		
-		// Find intersections
+		// Check for intersections
 		const intersects = this.raycaster.intersectObjects(meshes);
 		
-		// Return the first hit tag
 		if (intersects.length > 0) {
 			const mesh = intersects[0].object;
 			return this.tags.find(tag => tag.mesh === mesh);
@@ -346,31 +348,44 @@ export class TagManager {
 	}
 	
 	/**
-	 * Create a pulse effect on a tag for visual feedback
+	 * Create a pulse animation on a tag
 	 */
 	pulseTag(tag) {
 		if (!tag || !tag.mesh) return;
 		
 		// Store original scale
-		const originalScale = tag.mesh.scale.clone();
+		const originalScale = tag.mesh.scale.x;
 		
-		// Scale up quickly
-		tag.mesh.scale.multiplyScalar(1.2);
+		// Pulse animation timings
+		const duration = 300; // ms
+		const startTime = Date.now();
 		
-		// Return to original scale
-		setTimeout(() => {
-			tag.mesh.scale.copy(originalScale);
+		// Create animation function
+		const animate = () => {
+			const elapsed = Date.now() - startTime;
+			const progress = Math.min(1.0, elapsed / duration);
 			
-			// Update physics to match new size
-			this.physics.handleTagResize(tag, originalScale.x);
-		}, 200);
+			// Pulse wave: grow then shrink back
+			const scale = originalScale * (1 + 0.2 * Math.sin(progress * Math.PI));
+			tag.mesh.scale.set(scale, scale, scale);
+			
+			if (progress < 1.0) {
+				requestAnimationFrame(animate);
+			} else {
+				// Reset to original scale
+				tag.mesh.scale.set(originalScale, originalScale, originalScale);
+			}
+		};
+		
+		// Start animation
+		animate();
 	}
 	
 	/**
-	 * Update function called each frame
+	 * Update all tags (called once per frame)
 	 */
 	update() {
-		// Update physics
+		// Update physics system
 		this.physics.update(this.tags);
 	}
 } 

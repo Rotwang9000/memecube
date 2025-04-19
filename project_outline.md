@@ -8,16 +8,13 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
 - 3D cube structure formed by the 3D text elements themselves
 - Deep text extrusion to create cube-like appearances for each tag
 - Grid-based layout with all text aligned to X, Y, or Z axes
-- Shell-based positioning system that prioritizes outer positions
 - Tags prefixed with "$" symbol in a square font style
-- Varying random sizes for visual interest
 - Dynamic structure growth as more tags are added
 - "Squeezing" behaviour where neighboring tags resize to accommodate new ones
 - Animation system for new tags flying in and integrating into the structure
 - Interactive camera controls for viewers to navigate the 3D space
-- Click detection on text elements to open associated URLs
+- Click detection on text elements to open associated information in the scoreboard.
 - Demo mode with random tags appearing periodically
-- Optional wireframe visualization
 - DexScreener API integration to display latest tokens sized by market cap
 - Payment integration (future feature) to allow users to pay in SOL for larger text size
 
@@ -39,28 +36,13 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
   - `/js/visualizations/token-chart-3d.js` - 3D chart visualization
   - `/js/visualizations/token-cube.js` - Token cube visualization
 
-## Development Phases
-1. Basic setup and space environment creation
-2. 3D text rendering with cube-like appearance
-3. Grid-based structure and shell-based positioning system
-4. Tag animation and dynamic resizing system
-5. Structure growth and management
-6. Demo mode with periodic random tag generation
-7. User interaction and navigation
-8. URL linking functionality
-9. DexScreener API integration
-10. Payment integration (future phase)
 
 ## Implementation Details
 - Deep text extrusion with reduced curve segments for blocky appearance
-- Grid-based system for positioning tags in 3D space
-- Shell-layer calculation to prioritize outer positions
 - Tags are positioned at right angles to each other
 - Each new tag triggers a check of neighboring positions
-- Neighboring tags are resized to make room for new additions
-- When grid is full, the entire structure grows to accommodate more tags
 - Older tags naturally fill the inner spaces as the structure grows
-- Smooth animations for flying in, resizing, and subtle movement
+- Smooth animations for flying in, resizing,
 - Dynamic lighting to enhance 3D appearance
 - DexScreener API integration to fetch latest token profiles and market data
 - Modal interface for displaying tokens with market cap-based sizing

@@ -1,17 +1,17 @@
-# MemeCube
+# MemeIsometric Cluster
 
-An interactive 3D visualization of cryptocurrency meme coin tags that form a Borg-like cube structure.
+An interactive 3D visualization of cryptocurrency meme coin tags that form a Borg-like Isometric Cluster structure.
 
 ## Overview
 
-MemeCube is a Three.js-based web application where meme coin tags are displayed as 3D text elements that physically form a cube structure. New tags fly in from space and push existing tags inward as they join the structure. The cube grows organically as more tags are added, with older tags shrinking and moving toward the center. Viewers can navigate around this 3D structure and click on tags to visit the associated websites.
+MemeIsometric Cluster is a Three.js-based web application where meme coin tags are displayed as 3D text elements that physically form a Isometric Cluster structure. New tags fly in from space and push existing tags inward as they join the structure. The Isometric Cluster grows organically as more tags are added, with older tags shrinking and moving toward the center. Viewers can navigate around this 3D structure and click on tags to visit the associated websites.
 
 ## Features
 
 - Interactive 3D space environment with dynamic lighting
-- Cube structure formed entirely by the 3D text elements themselves (Cube being a loose term for the cohesive unit made up of tags that may not be an exact cube but all letters should be at right angles whatever way they face)
-- No wireframe - the letters themselves ARE the cube
-- Tags physically touch and form the outer shell of the cube
+- Isometric Cluster structure formed entirely by the 3D text elements themselves
+- No wireframe - the letters themselves ARE the Isometric Cluster
+- Tags physically touch and form the outer shell of the Isometric Cluster
 - 3D text with deep extrusion and blocky appearance
 - Tags prefixed with "$" symbol
 - Borg-like organic construction where new tags push older ones inward
@@ -22,7 +22,91 @@ MemeCube is a Three.js-based web application where meme coin tags are displayed 
 - Demo mode with random tags appearing periodically
 - DexScreener API integration to display and add latest tokens sized by market cap
 - Size-based tag prominence (future feature tied to SOL payments)
-- Dynamic token cube visualization showing real-time market movements
+- Dynamic token Isometric Cluster visualization showing real-time market movements
+
+## Recent Updates
+
+### Physics Engine Enhancements (June 2024)
+
+The tag physics system has been completely rewritten for more accurate and stable behavior:
+
+- **Proper Isometric Cluster Structure**: Tags now properly align at right angles to form a cohesive Isometric Cluster structure
+- **Improved Tag Entry**: New tags fly in like arrows from random entry points outside the Isometric Cluster
+- **Realistic Collisions**: Tags now create chain reactions when they collide, with movement propagating through the structure
+- **Size-Based Physics**: Larger tags have more mass and naturally create space by pushing other tags aside
+- **Stable Positioning**: Tags maintain their positions in the structure with proper forces that prevent excessive movement
+- **Smooth Transitions**: Tag resizing now features smooth animations with proper physics effects
+- **Intelligent Force Balancing**: The system balances repulsion, cohesion, and attraction forces for natural movement
+
+### Tag System Refactoring (April 2023)
+
+The tag system has been completely refactored to use a more robust physics-based approach:
+
+- The old tag positioning system has been replaced with a new TagManager and TagPhysics implementation
+- Font handling has been simplified and streamlined
+- The older tag components (tag-creator, tag-positioning, tag-animation, tag-interaction, tag-font-loader) have been consolidated into a more efficient system
+- The new system provides better performance and more realistic tag interactions
+
+### Font Setup
+
+The project uses custom fonts for 3D text:
+- Primary fonts are stored in the `/fonts` directory
+- The system now uses the Three.js TextGeometry and FontLoader via the import map
+- New fonts can be added to the fonts directory and will be automatically detected
+
+## Tag Interaction System Architecture
+
+The tag system is built with a modular architecture:
+
+1. **TagsManager** (`js/interactions/tag-cluster/tags.js`): High-level compatibility wrapper for backward compatibility with the old system
+2. **TagManager** (`js/interactions/tag-cluster/tag-manager.js`): Manages tag creation, user interaction, and rendering
+3. **TagPhysics** (`js/interactions/tag-cluster/tag-physics.js`): Core physics engine with force-based positioning and isometric structure maintenance
+4. **TagCluster** (`js/interactions/tag-cluster/tag-cluster.js`): Integration layer between DexScreener token data and the tag system
+
+This modular design allows for clear separation of concerns while maintaining a cohesive system. For more detailed information, see the comprehensive documentation in `docs/tag-cluster-system.md`.
+
+The TagPhysics module is independently testable and has unit tests available in the `tests/` directory. You can run these tests by opening `tests/tag-system.html` in your browser.
+
+## How It Works
+
+1. The application creates a 3D space environment where tags form a Isometric Cluster structure
+2. Each tag is rendered as deep 3D text with a Isometric Cluster-like appearance
+3. The tags themselves form the entire structure - there is no wireframe
+4. All tags are treated as solid objects that cannot overlap or intersect
+5. New tags fly in like arrows from random directions outside the structure
+6. Tags collide with existing tags causing dynamic chain reactions
+7. Collisions create dramatic movements with tags pushing each other aside
+9. The system supports varying tag sizes with occasional larger tags for visual interest, often based on a variable like Market cap.
+10. When tags collide, movement propagates through the structure creating secondary movements.
+11. A secondary movement will not cause the initiating mover to move again until the movement chain is complete.
+12. Only one movement chain at a time.
+13. Users can navigate around using intuitive controls (orbit by default or fly mode)
+14. Clicking on a tag opens the details in the token-scoreboard and a graph in the token-chart-3d. 
+15. In demo mode, random tags appear periodically to showcase the dynamic growth
+16. The Isometric Cluster is an irregular, living thing where things are always moving (plus should have a constant slow spin)
+
+## Tag Physics Rules
+
+The physics system enforces several key principles for a realistic and visually appealing tag structure:
+
+1. **Right-Angle Orientation**: Tags are oriented to align with the six faces of the Isometric Cluster structure, ensuring all text is easily readable and properly aligned.
+
+2. **Proper Collisions**: When tags collide, forces are applied based on their mass and velocity, with larger tags having more influence.
+
+3. **Coherent Structure**: The system maintains the overall Isometric Cluster shape through balanced forces:
+   - Surface-facing tags experience forces keeping them near the outer shell
+   - Interior tags experience gentle pressure toward the center
+   - Each tag's orientation is aligned with its closest Isometric Cluster face
+
+4. **Movement Chains**: When a tag is moved (through collision or size change):
+   - The movement propagates to tags it contacts
+   - Secondary and tertiary movements occur naturally
+   - A single initiator can't be affected by its own chain until the chain completes
+
+5. **Stable Positioning**: Tags move only enough to maintain the structure:
+   - Heavy damping prevents excessive oscillation or bouncing
+   - Speed limiting prevents tags from flying off
+   - Gentle central attraction keeps the structure cohesive
 
 ## Development
 
@@ -54,102 +138,21 @@ To run with auto-restart on file changes:
 npm run dev
 ```
 
-## Recent Updates
+## Testing
 
-### Tag System Refactoring (April 2023)
+### Unit Tests
 
-The tag system has been completely refactored to use a more robust physics-based approach:
+The project includes unit tests for core components:
 
-- The old tag positioning system has been replaced with a new TagManager and TagPhysics implementation
-- Font handling has been simplified and streamlined
-- The older tag components (tag-creator, tag-positioning, tag-animation, tag-interaction, tag-font-loader) have been consolidated into a more efficient system
-- The new system provides better performance and more realistic tag interactions
+1. **Physics Tests**: Validate the behavior of the tag physics system:
+   ```
+   http://localhost:3008/tests/physics.html?run_tests=true
+   ```
 
-### Font Setup
-
-The project uses custom fonts for 3D text:
-- Primary fonts are stored in the `/fonts` directory
-- The system now uses the Three.js TextGeometry and FontLoader via the import map
-- New fonts can be added to the fonts directory and will be automatically detected
-
-## How It Works
-
-1. The application creates a 3D space environment where tags form a cube structure
-2. Each tag is rendered as deep 3D text with a cube-like appearance
-3. The tags themselves form the entire structure - there is no wireframe
-4. All tags are treated as solid objects that cannot overlap or intersect
-5. New tags fly in like arrows from random directions outside the structure
-6. Tags collide with existing tags causing dynamic chain reactions
-7. Collisions create dramatic movements with tags pushing each other aside
-9. The system supports varying tag sizes with occasional larger tags for visual interest, often based on a variable like Market cap.
-10. When tags collide, movement propagates through the structure creating secondary movements.
-11. A secondary movement will not cause the initiating mover to move again until the movement chain is complete.
-12. Only one movement chain at a time.
-13. Users can navigate around using intuitive controls (orbit by default or fly mode)
-14. Clicking on a tag opens the details in the token-scoreboard and a graph in the token-chart-3d. 
-15. In demo mode, random tags appear periodically to showcase the dynamic growth
-
-## DexScreener Integration
-
-The application integrates with the DexScreener API to fetch and display the latest token profiles:
-
-1. Latest token profiles are fetched from the DexScreener API
-2. Market data (including price and market cap) is retrieved for each token
-3. Tokens are displayed in a modal window, sorted by market cap
-4. Users can view token details or add tokens to the cube directly from the list
-5. Token size in the cube is proportional to its market cap (larger market cap = larger tag)
-6. The modal provides a clean interface for browsing the latest tokens in the crypto market
-
-## Token Cube Visualization
-
-The token cube is a dynamic 3D visualization of the latest cryptocurrencies:
-
-1. Tokens from DexScreener are represented our "cube"
-2. Each token's size is proportional to its market capitalization (logarithmic scale)
-3. The visualization refreshes every 6 seconds with the latest market tokens and updates a few with further details like market cap.
-4. New tokens fly into the cube from random directions outside the visualization
-5. Tokens no longer in the latest list fly out of the cube with smooth animations
-6. Existing tokens dynamically resize based on changes in their market cap
-8. The entire cube gently rotates to showcase all tokens from different angles
-9. The visualization provides an intuitive real-time view of market activity
-
-## Tag Interaction System Rules
-
-The 3D tag system now uses a physics-based approach for realistic and stable interactions:
-
-1. **Force-Based Positioning**: Tags are positioned using a physics model with repulsion, attraction and damping forces:
-   - Tags naturally repel each other to prevent overlaps
-   - A central attraction force keeps the entire structure cohesive
-   - Velocity damping ensures tags settle into stable positions
-   - Mass-proportional forces ensure larger tags have more influence
-
-2. **Smooth Tag Entry**: New tags enter the scene with a natural flight path:
-   - They only fly like an arrow ie. Left or Right of reading diretion
-   - Tags appear from random positions outside the visible area
-   - They fly towards their destination with intelligent path adjustment
-   - The flight path adapts to avoid collisions with existing tags
-   - Upon arrival, they seamlessly join the physics system
-
-3. **Dynamic Resizing**: When tags change size due to market cap updates:
-   - Smooth animations make size transitions visually appealing 
-   - The physics system automatically adjusts to accommodate size changes
-   - Larger tags naturally create space pushing the other items around so it appears to bubble.
-   - Mass calculations update automatically to maintain proper physics
-
-4. **Collision Handling**: Tags react realistically when they come into contact:
-   - Precise bounding box detection prevents any overlap
-   - Vertical separation is prioritised to maintain readability
-   - Collisions trigger appropriate forces based on tag mass
-   - Higher damping after collisions prevents oscillation
-   - Tags only move just enough.. They do not fly off if they are hit but stay in the structure.
-
-5. **Cohesive Structure**: The entire cube maintains its integrity through:
-   - Continuous calculation of the center of mass
-   - Distance-based attraction forces pulling outliers back
-   - Balanced repulsion forces maintaining appropriate spacing
-   - Predictive collision avoidance to prevent disruptive movements
-
-This new physics-based approach creates a more natural, stable and visually appealing representation of a bubbling, living tag cube while maintaining the core concept of a cohesive structure formed entirely by 3D text elements.
+2. **Tag System Tests**: Verify tag creation, positioning and interaction:
+   ```
+   http://localhost:3008/tests/tags.html
+   ```
 
 ## Future Plans
 
@@ -159,9 +162,9 @@ This new physics-based approach creates a more natural, stable and visually appe
 - Enhanced visual effects
 - Additional  data integrations
 - Historical token performance visualization
-- Touch-based interaction with token cube on mobile devices
+- Touch-based interaction with token Isometric Cluster on mobile devices
 - More detailed token metrics visualization
-- Filtering and sorting options for token cube
+- Filtering and sorting options for token Isometric Cluster
 
 ## Code Organization
 
@@ -173,7 +176,7 @@ The codebase is organized into the following folders:
 - `js/interactions/` - Tag-related interactions and components
 - `js/ui/` - UI components and managers
 - `js/utils/` - Utility functions and helpers
-- `js/visualizations/` - 3D visualizations (scoreboard, chart, cube)
+- `js/visualizations/` - 3D visualizations (scoreboard, chart, Isometric Cluster)
 
 ### Data Processing
 The application uses a generic data processing architecture that allows for adding multiple data sources:

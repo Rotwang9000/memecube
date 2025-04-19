@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { Scene } from './core/scene.js';
-import { TagsManager } from './interactions/tags.js';
+import { TagsManager } from './interactions/tag-cluster/tags.js';
 import { initControls } from './core/controls.js';
 import { Utils } from './utils/utils.js';
 import { DexScreenerManager } from './ui/DexScreenerManager.js';
@@ -86,8 +86,8 @@ class MemeCube {
 	
 	// Initialize DexScreener integration
 	async initDexScreener() {
-		// Initialize DexScreener with scene and camera references
-		this.dexScreenerManager = new DexScreenerManager(this.scene.scene, this.scene.camera);
+		// Initialize DexScreener with scene, camera, and tagsManager references
+		this.dexScreenerManager = new DexScreenerManager(this.scene.scene, this.scene.camera, this.tagsManager);
 		
 		// Create UI elements
 		this.dexScreenerManager.createTokenListUI();
@@ -370,8 +370,7 @@ class MemeCube {
 			if (this.tagsManager.tags.length > 40) {
 				// Remove the oldest tag
 				const oldestTag = this.tagsManager.tags[0];
-				this.tagsManager.coreGroup.remove(oldestTag.mesh);
-				this.tagsManager.tags.shift();
+				this.tagsManager.tagManager.removeTag(oldestTag.id);
 			}
 		}, 3000 + Math.random() * 3000);
 	}
@@ -406,38 +405,17 @@ class MemeCube {
 			return; // Interaction was handled by visualizations
 		}
 		
-		// Handle clicks on cube tags
-		// Cast ray and check for intersections with tag meshes
-		const intersects = this.raycaster.intersectObjects(
-			this.tagsManager.coreGroup.children, true
-		);
+		// Handle clicks on cube tags via the TagManager's interaction handler
+		// Use raycaster to check for intersections with any tag
+		const intersectedTag = this.tagsManager.tagManager.findIntersectedTag();
 		
-		if (intersects.length > 0) {
-			// Check if we clicked on a tag by going up the parent chain
-			let object = intersects[0].object;
-			let tag = null;
+		if (intersectedTag) {
+			// Provide visual feedback
+			this.tagsManager.tagManager.pulseTag(intersectedTag);
 			
-			// Find the tag this mesh belongs to
-			for (const t of this.tagsManager.tags) {
-				if (t.mesh === object || t.mesh.children.includes(object)) {
-					tag = t;
-					break;
-				}
-			}
-			
-			// If we found a tag, open its URL
-			if (tag && tag.url) {
-				// Show a visual feedback that tag was clicked
-				const scaleFactor = 1.2;
-				tag.mesh.scale.set(scaleFactor, scaleFactor, scaleFactor);
-				
-				// Return to normal scale after a short delay
-				setTimeout(() => {
-					tag.mesh.scale.set(1, 1, 1);
-				}, 300);
-				
-				// Open URL in a new tab
-				window.open(tag.url, '_blank');
+			// Open the URL if available
+			if (intersectedTag.url && intersectedTag.url !== '#') {
+				window.open(intersectedTag.url, '_blank');
 			}
 		}
 	}

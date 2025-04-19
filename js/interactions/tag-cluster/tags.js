@@ -2,8 +2,23 @@ import * as THREE from 'three';
 import { TagManager } from './tag-manager.js';
 
 /**
- * Main class for managing tags in 3D space
- * This is a compatibility wrapper around the new TagManager system
+ * TagsManager - Main public API for the tag cluster system
+ * 
+ * This class serves as:
+ * 1. A compatibility wrapper around the new TagManager/TagPhysics system
+ * 2. The primary entry point for other application components to interact with tags
+ * 3. A manager for tag aging and lifecycle features
+ * 
+ * Usage guidelines:
+ * - Always use this class rather than accessing TagManager/TagPhysics directly
+ * - Use addTag() to add new tags to the system
+ * - Access tags array for read operations only
+ * - For tag removal or updates, use the methods provided here
+ * 
+ * Implementation notes:
+ * - This class maintains backwards compatibility with older code
+ * - It delegates core functionality to the TagManager class
+ * - Tag aging and demo functionality are implemented at this level
  */
 export class TagsManager {
 	constructor(scene, camera) {
@@ -72,7 +87,7 @@ export class TagsManager {
 			size: 0.5 // Base text size before scaling
 		});
 		
-		// Update references
+		// Update references to ensure we always have the latest tags
 		this.tags = this.tagManager.tags;
 		
 		// Add age tracking (for compatibility with old system)
@@ -111,15 +126,23 @@ export class TagsManager {
 	
 	/**
 	 * Generate a random tag for demo mode
+	 * @returns {Object} Random tag object
 	 */
 	generateRandomTag() {
 		const randomText = this.getRandomTagText();
 		const randomUrl = `https://example.com/${randomText.toLowerCase()}`;
-		return this.addTag(randomText, randomUrl);
+		const size = 0.5 + Math.random() * 0.8; // More varied sizes for demo
+		
+		return {
+			text: randomText,
+			url: randomUrl,
+			size: size
+		};
 	}
 	
 	/**
 	 * Generate a random tag name
+	 * @returns {string} Random tag name
 	 */
 	getRandomTagText() {
 		const prefixes = ['MOON', 'DOGE', 'SHIB', 'APE', 'FLOKI', 'PEPE', 'CAT', 'BABY', 'TURBO', 'SPACE', 'ELON', 'ROCKET', 'BASED', 'CHAD', 'WOJAK', 'MUSK', 'ALPHA', 'DRAGON', 'FIRE', 'DUCK', 'FROG', 'ZERO'];
@@ -138,6 +161,7 @@ export class TagsManager {
 	
 	/**
 	 * Update tag sizes based on token data
+	 * @param {Object} tokenData - Token data with market cap info
 	 */
 	updateTagSizes(tokenData) {
 		if (!tokenData || !tokenData.tokens) return;
@@ -184,6 +208,7 @@ export class TagsManager {
 	
 	/**
 	 * Update the tag system (called once per frame)
+	 * @param {number} deltaTime - Time since last frame in seconds
 	 */
 	update(deltaTime) {
 		// Update tag manager
@@ -198,6 +223,7 @@ export class TagsManager {
 	
 	/**
 	 * Update tag aging (making older tags smaller and move inward)
+	 * @param {number} deltaTime - Time since last frame in seconds
 	 */
 	updateTagAging(deltaTime) {
 		// Only update every few seconds to reduce computation
@@ -240,6 +266,9 @@ export class TagsManager {
 	
 	/**
 	 * Calculate size based on age position (0 = oldest, 1 = newest)
+	 * @param {number} originalSize - Original tag size
+	 * @param {number} agePosition - Age position from 0 (oldest) to 1 (newest)
+	 * @returns {number} New size
 	 */
 	calculateSizeByAge(originalSize, agePosition) {
 		// Older tags should be smaller
@@ -248,14 +277,7 @@ export class TagsManager {
 		const minSizeFactor = 0.4;
 		const sizeFactor = minSizeFactor + (1 - minSizeFactor) * agePosition;
 		
-		return originalSize * sizeFactor;
-	}
-	
-	/**
-	 * Resize a tag
-	 */
-	resizeTag(tag, newSize) {
-		// Use the new tag manager to resize
-		this.tagManager.resizeTag(tag.id, newSize);
+		// Calculate new size but don't go below minimum
+		return Math.max(0.2, originalSize * sizeFactor);
 	}
 } 

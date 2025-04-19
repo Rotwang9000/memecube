@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Tag System Tests</title>
+	<style>
+		body {
+			font-family: sans-serif;
+			max-width: 800px;
+			margin: 0 auto;
+			padding: 20px;
+			background-color: #f5f5f5;
+		}
+		h1 {
+			color: #333;
+		}
+		#results {
+			background-color: #fff;
+			border: 1px solid #ddd;
+			border-radius: 4px;
+			padding: 15px;
+			margin-top: 20px;
+			white-space: pre-wrap;
+			font-family: monospace;
+			max-height: 500px;
+			overflow-y: auto;
+		}
+		.pass {
+			color: green;
+		}
+		.fail {
+			color: red;
+		}
+	</style>
+</head>
+<body>
+	<h1>Tag System Tests</h1>
+	<p>This page runs tests for the TagsManager, TagManager, and TagPhysics components.</p>
+	
+	<div>
+		<h2>Test Results</h2>
+		<div id="results">Running tests...</div>
+	</div>
+	
+	<!-- Import THREE.js -->
+	<script type="importmap">
+	{
+		"imports": {
+			"three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+			"three/addons/loaders/FontLoader.js": "https://unpkg.com/three@0.159.0/examples/jsm/loaders/FontLoader.js",
+			"three/addons/geometries/TextGeometry.js": "https://unpkg.com/three@0.159.0/examples/jsm/geometries/TextGeometry.js"
+		}
+	}
+	</script>
+	
+	<!-- Override console to capture output -->
+	<script>
+		// Capture console output
+		const resultsElement = document.getElementById('results');
+		resultsElement.textContent = '';
+		
+		// Store original console methods
+		const originalConsole = {
+			log: console.log,
+			error: console.error,
+			warn: console.warn,
+			assert: console.assert
+		};
+		
+		// Override console methods to display in results div
+		console.log = function() {
+			const args = Array.from(arguments);
+			const message = args.map(arg => 
+				typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+			).join(' ');
+			
+			resultsElement.textContent += message + '\n';
+			originalConsole.log.apply(console, arguments);
+		};
+		
+		console.error = function() {
+			const args = Array.from(arguments);
+			const message = args.map(arg => 
+				typeof arg === 'object' ? JSON.stringify(arg) : String(arg)
+			).join(' ');
+			
+			resultsElement.textContent += '❌ ERROR: ' + message + '\n';
+			resultsElement.innerHTML += '<div class="fail">' + message + '</div>';
+			originalConsole.error.apply(console, arguments);
+		};
+		
+		console.assert = function(condition, message) {
+			if (!condition) {
+				resultsElement.textContent += '❌ ASSERTION FAILED: ' + message + '\n';
+				resultsElement.innerHTML += '<div class="fail">ASSERTION FAILED: ' + message + '</div>';
+				originalConsole.assert.apply(console, arguments);
+			}
+		};
+	</script>
+	
+	<!-- Import test script -->
+	<script type="module" src="tag-system.js"></script>
+</body>
+</html> 
