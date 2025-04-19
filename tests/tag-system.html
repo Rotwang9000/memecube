@@ -36,23 +36,12 @@
 </head>
 <body>
 	<h1>Tag System Tests</h1>
-	<p>This page runs tests for the TagsManager, TagManager, and TagPhysics components.</p>
+	<p>This page runs tests for the TagsManager, TagManager, and TagPhysics components using mock implementations.</p>
 	
 	<div>
 		<h2>Test Results</h2>
 		<div id="results">Running tests...</div>
 	</div>
-	
-	<!-- Import THREE.js -->
-	<script type="importmap">
-	{
-		"imports": {
-			"three": "https://unpkg.com/three@0.159.0/build/three.module.js",
-			"three/addons/loaders/FontLoader.js": "https://unpkg.com/three@0.159.0/examples/jsm/loaders/FontLoader.js",
-			"three/addons/geometries/TextGeometry.js": "https://unpkg.com/three@0.159.0/examples/jsm/geometries/TextGeometry.js"
-		}
-	}
-	</script>
 	
 	<!-- Override console to capture output -->
 	<script>

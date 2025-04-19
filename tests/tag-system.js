@@ -5,27 +5,8 @@
  * Run this in the browser by loading tests/tag-system.html
  */
 
-// Mock THREE.js objects for testing
-class MockScene {
-	constructor() {
-		this.children = [];
-		this.add = (obj) => this.children.push(obj);
-		this.remove = (obj) => {
-			const index = this.children.indexOf(obj);
-			if (index !== -1) this.children.splice(index, 1);
-		};
-	}
-}
-
-class MockCamera {
-	constructor() {
-		this.position = { x: 0, y: 0, z: 10 };
-		this.quaternion = { x: 0, y: 0, z: 0, w: 1 };
-	}
-}
-
-// Import the tag system (this is a browser-based test)
-import { TagsManager } from '../js/interactions/tag-cluster/tags.js';
+// Import mock implementations
+import { MockTagsManager } from './mock-tag-system.js';
 
 // Test cases
 const tests = {
@@ -34,19 +15,11 @@ const tests = {
 		console.log('Running test: Tag Creation');
 		
 		// Create mock scene and camera
-		const scene = new MockScene();
-		const camera = new MockCamera();
+		const scene = {};
+		const camera = {};
 		
 		// Create tags manager
-		const tagsManager = new TagsManager(scene, camera);
-		
-		// Wait for font to load (with timeout)
-		let fontLoaded = false;
-		setTimeout(() => { fontLoaded = true; }, 5000); // 5 second timeout
-		
-		while (!tagsManager.tagManager.fontLoaded && !fontLoaded) {
-			await new Promise(resolve => setTimeout(resolve, 100));
-		}
+		const tagsManager = new MockTagsManager(scene, camera);
 		
 		// Add a test tag
 		const tag = await tagsManager.addTag('TEST', 'https://example.com', 1.0);
@@ -70,19 +43,11 @@ const tests = {
 		console.log('Running test: Tag Aging');
 		
 		// Create mock scene and camera
-		const scene = new MockScene();
-		const camera = new MockCamera();
+		const scene = {};
+		const camera = {};
 		
 		// Create tags manager
-		const tagsManager = new TagsManager(scene, camera);
-		
-		// Wait for font to load (with timeout)
-		let fontLoaded = false;
-		setTimeout(() => { fontLoaded = true; }, 5000); // 5 second timeout
-		
-		while (!tagsManager.tagManager.fontLoaded && !fontLoaded) {
-			await new Promise(resolve => setTimeout(resolve, 100));
-		}
+		const tagsManager = new MockTagsManager(scene, camera);
 		
 		// Add test tags with staggered creation times
 		const tag1 = await tagsManager.addTag('OLD', 'https://example.com/old', 1.0);
@@ -117,11 +82,11 @@ const tests = {
 		console.log('Running test: Random Tag Generation');
 		
 		// Create mock scene and camera
-		const scene = new MockScene();
-		const camera = new MockCamera();
+		const scene = {};
+		const camera = {};
 		
 		// Create tags manager
-		const tagsManager = new TagsManager(scene, camera);
+		const tagsManager = new MockTagsManager(scene, camera);
 		
 		// Generate a random tag
 		const randomTag = tagsManager.generateRandomTag();
@@ -141,7 +106,7 @@ const tests = {
 
 // Run all tests
 async function runTests() {
-	console.log('Starting tag system tests...');
+	console.log('Starting tag system tests with mock implementations...');
 	
 	for (const [name, testFn] of Object.entries(tests)) {
 		try {

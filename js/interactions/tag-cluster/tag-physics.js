@@ -3,7 +3,7 @@ import * as THREE from 'three';
 /**
  * TagPhysics - Proper implementation for tag positioning and interactions
  * 
- * This system creates a cohesive cube structure with tags at right angles,
+ * This system creates a cohesive isometric cluster structure with tags at right angles,
  * properly handles tag entry and movement, and ensures stable physics.
  * 
  * NOTE: If font loading issues occur (SyntaxError with "<!DOCTYPE" not valid JSON),
@@ -22,25 +22,29 @@ export class TagPhysics {
 		// Physics configuration - properly tuned values
 		this.config = {
 			// Structure parameters
-			cubeCoherence: 0.9,        // How strongly we enforce cube structure (increased)
-			tagSeparation: 0.1,        // Minimal spacing between tags (increased)
-			rightAngleTolerance: 0.1,  // How strictly we enforce right angles
+			cubeCoherence: 1.8,        // How strongly we enforce cube structure (increased)
+			tagSeparation: 0.01,       // Hair's width spacing between tags
+			rightAngleTolerance: 0.05, // Strict right angle enforcement
 			
 			// Movement parameters
-			damping: 0.88,            // Strong damping to prevent bouncing (increased)
-			maxSpeed: 0.8,            // Conservative speed limit (decreased)
-			entrySpeed: 0.4,          // New tag approach speed (decreased)
-			spinRate: 0.01,           // Subtle constant rotation
+			damping: 0.92,             // Strong damping to prevent bouncing
+			maxSpeed: 0.4,             // Conservative speed limit
+			entrySpeed: 0.3,           // New tag approach speed
+			spinRate: 0.003,           // Subtle constant rotation
 			
 			// Force parameters
-			repulsionStrength: 1.2,   // Tag repulsion force (increased)
-			surfaceAttraction: 0.9,   // Pull to form outer shell (increased)
-			structureStrength: 0.8,   // Force maintaining cube structure (increased)
-			verticalPriority: 1.5,    // Prioritize vertical separation
+			repulsionStrength: 2.2,    // Tag repulsion force (increased)
+			surfaceAttraction: 1.5,    // Pull to form outer shell (increased)
+			structureStrength: 1.8,    // Force maintaining cube structure (increased)
+			verticalPriority: 2.0,     // Strong vertical priority for up/down movement
 			
 			// Animation parameters
-			resizeTime: 0.5,          // Seconds for size transitions
-			settleTolerance: 0.001    // When to consider a tag settled
+			resizeTime: 0.5,           // Seconds for size transitions
+			settleTolerance: 0.0005,   // When to consider a tag settled
+			
+			// Distribution and packing
+			faceBalancing: 0.9,        // How strongly to balance tags across faces
+			packingDensity: 1.3        // Density factor (higher = tighter packing)
 		};
 
 		// Internal state
@@ -60,6 +64,9 @@ export class TagPhysics {
 			new THREE.Vector3(0, 0, 1),   // +Z
 			new THREE.Vector3(0, 0, -1)   // -Z
 		];
+		
+		// Face utilization tracking
+		this.faceUtilization = [0, 0, 0, 0, 0, 0];
 		
 		// Debug helpers
 		this.debug = {
@@ -90,6 +97,7 @@ export class TagPhysics {
 			bbox: new THREE.Box3().setFromObject(tag.mesh),
 			orientation: orientation.clone(),
 			targetOrientation: orientation.clone(),
+			movementAxis: this.calculateMovementAxis(tag.mesh), // Primary movement axis
 			isNew: isNew,
 			isSettled: false,
 			isOnSurface: false,
@@ -112,22 +120,20 @@ export class TagPhysics {
 	}
 
 	/**
+	 * Calculate the primary movement axis for the tag (up/down relative to tag orientation)
+	 */
+	calculateMovementAxis(mesh) {
+		// Calculate the "up" vector in the tag's local space
+		const localUp = new THREE.Vector3(0, 1, 0);
+		return localUp.applyQuaternion(mesh.quaternion);
+	}
+
+	/**
 	 * Calculate orientation that aligns tag with cube structure
 	 */
 	calculateTagOrientation(mesh) {
-		// Find closest cube face to align with
-		let bestFace = 0;
-		let maxAlignment = -Infinity;
-		
-		const tagForward = new THREE.Vector3(0, 0, 1).applyQuaternion(mesh.quaternion);
-		
-		for (let i = 0; i < this.faceDirections.length; i++) {
-			const alignment = tagForward.dot(this.faceDirections[i]);
-			if (alignment > maxAlignment) {
-				maxAlignment = alignment;
-				bestFace = i;
-			}
-		}
+		// Find best face based on utilization
+		let bestFace = this.chooseBestFace();
 		
 		// Create quaternion that aligns tag with cube face
 		const alignQuat = new THREE.Quaternion();
@@ -146,6 +152,29 @@ export class TagPhysics {
 	}
 
 	/**
+	 * Choose the best face to place a new tag based on current utilization
+	 */
+	chooseBestFace() {
+		// Find the least utilized face with some randomization
+		let minUtilization = Infinity;
+		let leastUtilizedFaces = [];
+		
+		// Find faces with minimum utilization
+		for (let i = 0; i < 6; i++) {
+			if (this.faceUtilization[i] < minUtilization) {
+				minUtilization = this.faceUtilization[i];
+				leastUtilizedFaces = [i];
+			} else if (this.faceUtilization[i] === minUtilization) {
+				leastUtilizedFaces.push(i);
+			}
+		}
+		
+		// Randomly select from least utilized faces
+		const faceIndex = Math.floor(Math.random() * leastUtilizedFaces.length);
+		return leastUtilizedFaces[faceIndex];
+	}
+
+	/**
 	 * Add a new tag that flies toward the cube structure
 	 */
 	addNewTag(tag, existingTags = []) {
@@ -157,14 +186,18 @@ export class TagPhysics {
 		// Update cube structure info
 		this.updateCubeStructure(existingTags);
 		
+		// Choose best entry face - prioritize even distribution
+		const targetFace = this.chooseBestEntryFace(existingTags);
+		
+		// Update face utilization
+		this.faceUtilization[targetFace]++;
+		
+		const faceDir = this.faceDirections[targetFace];
+		
 		// Calculate spawn position
 		const spawnDistance = this.calculateSpawnDistance(existingTags);
 		
-		// Choose best entry face 
-		const targetFace = this.chooseBestEntryFace(existingTags);
-		const faceDir = this.faceDirections[targetFace];
-		
-		// Position and orient tag
+		// Position and orient tag - always entering along the text reading direction
 		const entryPos = faceDir.clone().negate().multiplyScalar(spawnDistance);
 		tag.mesh.position.copy(entryPos);
 		
@@ -180,74 +213,52 @@ export class TagPhysics {
 		data.entryPosition = entryPos.clone();
 		data.face = targetFace;
 		
-		// Entry velocity with slight randomization for naturalism
-		const toCube = new THREE.Vector3()
-			.subVectors(this.cubeCentre, entryPos)
-			.normalize();
-			
-		// Add slight randomization to avoid head-on approach
-		toCube.x += (Math.random() - 0.5) * 0.2;
-		toCube.y += (Math.random() - 0.5) * 0.2;
-		toCube.z += (Math.random() - 0.5) * 0.2;
-		toCube.normalize();
-		
-		data.velocity.copy(toCube.multiplyScalar(this.config.entrySpeed));
+		// Entry velocity aligned with tag's forward direction
+		const tagForward = new THREE.Vector3(0, 0, 1).applyQuaternion(tag.mesh.quaternion);
+		data.velocity.copy(tagForward.multiplyScalar(this.config.entrySpeed));
 	}
 
 	/**
 	 * Find best face for new tag entry
 	 */
 	chooseBestEntryFace(existingTags) {
-		// Count tags on each face
-		const faceCounts = [0, 0, 0, 0, 0, 0];
-		
-		for (const tag of existingTags) {
-			if (!tag || !this.tagData.has(tag.id)) continue;
-			const data = this.tagData.get(tag.id);
-			if (data.face >= 0 && data.face < 6) {
-				faceCounts[data.face]++;
-			}
-		}
-		
-		// Find face with fewest tags
+		// Find the least utilized face
 		let minCount = Infinity;
-		let bestFace = 0;
+		let bestFaces = [];
 		
 		for (let i = 0; i < 6; i++) {
-			if (faceCounts[i] < minCount) {
-				minCount = faceCounts[i];
-				bestFace = i;
+			if (this.faceUtilization[i] < minCount) {
+				minCount = this.faceUtilization[i];
+				bestFaces = [i];
+			} else if (this.faceUtilization[i] === minCount) {
+				bestFaces.push(i);
 			}
 		}
 		
-		// Add randomization (30% chance to choose random face)
-		if (Math.random() < 0.3) {
-			bestFace = Math.floor(Math.random() * 6);
-		}
-		
-		return bestFace;
+		// If we have multiple best faces, choose randomly
+		return bestFaces[Math.floor(Math.random() * bestFaces.length)];
 	}
 
 	/**
 	 * Calculate appropriate spawn distance
 	 */
 	calculateSpawnDistance(existingTags) {
-		// Base on furthest tag plus margin
-		let maxDistance = 0;
+		// Find furthest tag distance
+		let maxDistSq = 0;
 		
 		for (const tag of existingTags) {
 			if (!tag || !tag.mesh) continue;
-			const dist = tag.mesh.position.length();
-			maxDistance = Math.max(maxDistance, dist);
+			const distSq = tag.mesh.position.lengthSq();
+			maxDistSq = Math.max(maxDistSq, distSq);
 		}
 		
-		// Ensure minimum reasonable distance 
-		// Changed from 1.5 to 1.2 to make tags closer together
-		maxDistance = Math.max(maxDistance, this.cubeSize * 1.2);
+		const maxDistance = Math.sqrt(maxDistSq);
 		
-		// Add smaller margin for spawning to avoid too much separation
-		// Changed from 3.0 to 1.8 to bring tags in closer
-		return maxDistance + 1.8;
+		// Ensure minimum reasonable distance 
+		const baseDistance = Math.max(maxDistance, this.cubeSize);
+		
+		// Add small margin for spawning
+		return baseDistance + 1.0;
 	}
 
 	/**
@@ -257,6 +268,12 @@ export class TagPhysics {
 		if (!this.tagData.has(tagId)) {
 			console.warn(`TagPhysics: Attempted to remove non-existent tag ${tagId}`);
 			return false;
+		}
+		
+		// Decrement face utilization
+		const data = this.tagData.get(tagId);
+		if (data.face >= 0 && data.face < 6) {
+			this.faceUtilization[data.face] = Math.max(0, this.faceUtilization[data.face] - 1);
 		}
 		
 		this.tagData.delete(tagId);
@@ -284,17 +301,22 @@ export class TagPhysics {
 		// Mark as unsettled
 		data.isSettled = false;
 
-		// Larger tags push outward, smaller pull inward
+		// Larger tags push outward along movement axis, smaller pull inward
 		const isGrowing = newSize > data.size.current;
 		if (isGrowing) {
-			// Calculate outward direction
+			// Use movement axis (up/down relative to tag) with some outward direction
 			const outwardDir = new THREE.Vector3()
 				.subVectors(tag.mesh.position, this.cubeCentre)
 				.normalize();
-				
-			// Apply gentle outward impulse
+			
+			// Blend movement axis with outward direction, favoring the movement axis
+			const moveDir = new THREE.Vector3().copy(data.movementAxis);
+			moveDir.addScaledVector(outwardDir, 0.3);
+			moveDir.normalize();
+			
+			// Apply gentle impulse
 			const impulse = Math.min(0.3, (newSize / data.size.current) - 1);
-			data.velocity.addScaledVector(outwardDir, impulse);
+			data.velocity.addScaledVector(moveDir, impulse);
 			
 			// Start movement chain for propagation
 			this.startMovementChain(tag.id);
@@ -333,12 +355,42 @@ export class TagPhysics {
 		// Integrate motion
 		this.integrateMotion(tags, dt);
 		
+		// Constrain movement to primarily along movement axis
+		this.constrainMovement(tags);
+		
 		// Ensure no intersections
 		this.resolveIntersections(tags);
 		
 		// Update debug visualization if enabled
 		if (this.debug.showStructure) {
 			this.updateDebugVisualization();
+		}
+	}
+
+	/**
+	 * Constrain movement to be primarily along the tag's movement axis
+	 */
+	constrainMovement(tags) {
+		for (const tag of tags) {
+			if (!tag || !tag.mesh || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+			
+			// Skip new tags still entering
+			if (data.isNew && data.age < 1.0) continue;
+			
+			// Get movement axis (up/down relative to tag)
+			const movementAxis = data.movementAxis;
+			
+			// Project velocity onto movement axis to keep primarily up/down movement
+			const currentVelocity = data.velocity.clone();
+			const movementComponent = currentVelocity.dot(movementAxis);
+			const alignedVelocity = movementAxis.clone().multiplyScalar(movementComponent);
+			
+			// Add small amount of original velocity to avoid being too restricted
+			alignedVelocity.addScaledVector(currentVelocity, 0.1);
+			
+			// Update velocity
+			data.velocity.copy(alignedVelocity);
 		}
 	}
 
@@ -368,33 +420,41 @@ export class TagPhysics {
 	updateCubeStructure(tags) {
 		if (tags.length === 0) return;
 		
-		// Calculate center and size
-		let sum = new THREE.Vector3();
-		let count = 0;
-		let maxDist = 0;
+		// Calculate center using weighted average based on tag size
+		let totalWeight = 0;
+		let weightedSum = new THREE.Vector3();
+		let maxDistSq = 0;
 		
+		// First pass: calculate weighted center
 		for (const tag of tags) {
 			if (!tag || !tag.mesh) continue;
-			sum.add(tag.mesh.position);
-			count++;
 			
-			const dist = tag.mesh.position.length();
-			maxDist = Math.max(maxDist, dist);
+			// Use tag scale as weight (larger tags have more influence)
+			const weight = tag.mesh.scale.x * tag.mesh.scale.x;
+			totalWeight += weight;
+			
+			// Add weighted position
+			weightedSum.addScaledVector(tag.mesh.position, weight);
+			
+			// Track maximum distance squared
+			const distSq = tag.mesh.position.lengthSq();
+			maxDistSq = Math.max(maxDistSq, distSq);
 		}
 		
 		// Update center
-		if (count > 0) {
-			this.cubeCentre.copy(sum.divideScalar(count));
+		if (totalWeight > 0) {
+			// Use weighted average for center
+			this.cubeCentre.copy(weightedSum.divideScalar(totalWeight));
 			
-			// Adjust cube size to be tighter (changed multiplier from 1.2 to 1.1)
-			this.cubeSize = Math.max(1.0, maxDist * 1.1);
+			// Calculate tight cube size based on maximum distance
+			this.cubeSize = Math.max(1.0, Math.sqrt(maxDistSq) * 0.8);
 			
-			// Force minimum cube size based on tag count to prevent too-small clusters
-			const minSizeByCount = Math.pow(count * 0.15, 1/3) + 1.0; // Cubic root scaling
+			// Scale based on tag count with appropriate density
+			const minSizeByCount = Math.pow(tags.length * 0.08, 1/3) * this.config.packingDensity + 0.7;
 			this.cubeSize = Math.max(this.cubeSize, minSizeByCount);
 		}
 		
-		// Assign tags to faces
+		// Assign tags to faces for proper structure
 		this.assignTagsToFaces(tags);
 	}
 
@@ -402,6 +462,9 @@ export class TagPhysics {
 	 * Assign tags to appropriate cube faces
 	 */
 	assignTagsToFaces(tags) {
+		// Reset face utilization
+		this.faceUtilization = [0, 0, 0, 0, 0, 0];
+		
 		for (const tag of tags) {
 			if (!tag || !tag.mesh || !this.tagData.has(tag.id)) continue;
 			const data = this.tagData.get(tag.id);
@@ -430,6 +493,7 @@ export class TagPhysics {
 			if (bestAlignment > 0.7) {
 				data.face = bestFace;
 				data.isOnSurface = true;
+				this.faceUtilization[bestFace]++;
 			} else {
 				data.isOnSurface = false;
 			}
@@ -458,26 +522,31 @@ export class TagPhysics {
 			// Skip tags in active chains
 			if (data.chainProcessed) continue;
 			
-			// Calculate force based on position
+			// Calculate direction to cube center
 			const relPos = new THREE.Vector3()
 				.subVectors(tag.mesh.position, this.cubeCentre);
 			const distance = relPos.length();
 			
 			if (data.isOnSurface) {
-				// Surface tags maintain distance near cube radius
+				// Surface tags should maintain distance at cube radius
 				const targetDist = this.cubeSize * 0.5;
 				const distError = targetDist - distance;
 				
 				// Force pulls/pushes to maintain cube shape
-				// Apply stronger coherence force for surface tags (multiplied by 1.5)
-				const forceMag = distError * this.config.structureStrength * 1.5;
+				const forceMag = distError * this.config.structureStrength * 2.0;
 				const forceDir = relPos.clone().normalize();
 				
-				data.velocity.addScaledVector(forceDir, forceMag * dt / data.mass);
+				// Apply force primarily along movement axis
+				const movementComponent = forceDir.dot(data.movementAxis);
+				const alignedForce = data.movementAxis.clone().multiplyScalar(movementComponent * forceMag * 1.5);
+				const lateralForce = forceDir.clone().multiplyScalar(forceMag * 0.5);
+				
+				// Combine forces with priority to movement axis
+				data.velocity.addScaledVector(alignedForce, dt / data.mass);
+				data.velocity.addScaledVector(lateralForce, dt / data.mass);
 			} else {
 				// Interior tags move toward center with stronger force
-				// Increased force for interior tags to ensure tighter packing (multiplied by 2.0)
-				const forceMag = distance * 0.2 * this.config.structureStrength;
+				const forceMag = distance * 0.3 * this.config.structureStrength * 4.0;
 				const forceDir = relPos.clone().normalize().negate();
 				
 				data.velocity.addScaledVector(forceDir, forceMag * dt / data.mass);
@@ -494,12 +563,8 @@ export class TagPhysics {
 	 * Align tag orientation with cube structure
 	 */
 	alignTagOrientation(tag, data, dt) {
-		// Calculate target orientation
-		const targetOrientation = this.calculateTagOrientation(tag.mesh);
-		data.targetOrientation.copy(targetOrientation);
-		
 		// Smoothly interpolate toward target
-		const slerpFactor = Math.min(1.0, dt * 2.0);
+		const slerpFactor = Math.min(1.0, dt * 3.0);
 		data.orientation.slerp(data.targetOrientation, slerpFactor);
 		
 		// Apply to mesh
@@ -544,19 +609,30 @@ export class TagPhysics {
 				// Calculate sizes for proper separation
 				const sizeA = this.getTagSize(dataA.bbox);
 				const sizeB = this.getTagSize(dataB.bbox);
-				const minSeparation = (sizeA + sizeB) * 0.5 + this.config.tagSeparation;
+				
+				// Use hair's width separation
+				const minSeparation = (sizeA + sizeB) * 0.35 + this.config.tagSeparation;
 				
 				// Apply forces if too close
 				if (distance < minSeparation) {
 					// Calculate repulsion strength
 					const overlap = minSeparation - distance;
-					let forceMag = overlap * this.config.repulsionStrength;
+					let forceMag = overlap * this.config.repulsionStrength * 2.0;
 					
-					// Prioritize vertical separation
-					const verticalComponent = Math.abs(direction.y);
-					if (verticalComponent > 0.5) {
-						forceMag *= this.config.verticalPriority;
-					}
+					// Project forces onto movement axes for both tags
+					const dirAlongAxisA = direction.dot(dataA.movementAxis);
+					const dirAlongAxisB = direction.dot(dataB.movementAxis);
+					
+					// Create blended force directions prioritizing movement along axes
+					const forceDir_A = new THREE.Vector3().copy(dataA.movementAxis)
+						.multiplyScalar(dirAlongAxisA)
+						.addScaledVector(direction, 0.2)
+						.normalize();
+						
+					const forceDir_B = new THREE.Vector3().copy(dataB.movementAxis)
+						.multiplyScalar(-dirAlongAxisB)
+						.addScaledVector(direction.clone().negate(), 0.2)
+						.normalize();
 					
 					// Calculate force for each tag
 					const totalMass = dataA.mass + dataB.mass;
@@ -565,19 +641,19 @@ export class TagPhysics {
 					
 					// Handle chain propagation
 					if (dataA.chainProcessed) {
-						dataB.velocity.addScaledVector(direction.negate(), forceB * dt / dataB.mass);
+						dataB.velocity.addScaledVector(forceDir_B, forceB * dt / dataB.mass);
 						this.propagateMovement(tagA.id, tagB.id);
 					} else if (dataB.chainProcessed) {
-						dataA.velocity.addScaledVector(direction, forceA * dt / dataA.mass);
+						dataA.velocity.addScaledVector(forceDir_A, forceA * dt / dataA.mass);
 						this.propagateMovement(tagB.id, tagA.id);
 					} else {
 						// Normal case - both respond
-						dataA.velocity.addScaledVector(direction, forceA * dt / dataA.mass);
-						dataB.velocity.addScaledVector(direction.negate(), forceB * dt / dataB.mass);
+						dataA.velocity.addScaledVector(forceDir_A, forceA * dt / dataA.mass);
+						dataB.velocity.addScaledVector(forceDir_B, forceB * dt / dataB.mass);
 					}
 					
 					// Mark as unsettled
-				dataA.isSettled = dataB.isSettled = false;
+					dataA.isSettled = dataB.isSettled = false;
 				}
 			}
 		}
@@ -596,98 +672,9 @@ export class TagPhysics {
 	 * Check if tags are close enough to interact
 	 */
 	areTagsClose(bbox1, bbox2) {
-		// Expand for early intersection test
-		const expanded1 = bbox1.clone().expandByScalar(this.config.tagSeparation);
+		// Expand for early intersection test - minimal expansion for hair's width check
+		const expanded1 = bbox1.clone().expandByScalar(this.config.tagSeparation * 2);
 		return expanded1.intersectsBox(bbox2);
-	}
-
-	/**
-	 * Organize tags on cube surface
-	 */
-	applySurfaceForces(tags, dt) {
-		// Group tags by face
-		const faceTags = [[], [], [], [], [], []];
-		
-		for (const tag of tags) {
-			if (!tag || !tag.mesh || !this.tagData.has(tag.id)) continue;
-			const data = this.tagData.get(tag.id);
-
-			if (data.face >= 0 && data.face < 6) {
-				faceTags[data.face].push(tag);
-			}
-		}
-		
-		// Process each face
-		for (let face = 0; face < 6; face++) {
-			this.organizeFaceTags(faceTags[face], face, dt);
-		}
-	}
-
-	/**
-	 * Arrange tags on a specific face
-	 */
-	organizeFaceTags(faceTags, faceIndex, dt) {
-		if (faceTags.length <= 1) return;
-		
-		const faceNormal = this.faceDirections[faceIndex];
-		
-		// Find face center
-		const faceCenter = this.cubeCentre.clone().addScaledVector(
-			faceNormal, 
-			this.cubeSize * 0.5
-		);
-		
-		// Calculate tangent vectors
-		const up = new THREE.Vector3(0, 1, 0);
-		const tangent1 = new THREE.Vector3().crossVectors(up, faceNormal).normalize();
-		if (tangent1.lengthSq() < 0.1) {
-			// Special case for top/bottom
-			tangent1.set(1, 0, 0);
-		}
-		const tangent2 = new THREE.Vector3().crossVectors(faceNormal, tangent1).normalize();
-		
-		// Apply organization forces
-		for (const tagA of faceTags) {
-			if (!tagA || !this.tagData.has(tagA.id)) continue;
-			const dataA = this.tagData.get(tagA.id);
-			
-			// Calculate position in face coordinates
-			const relPosA = new THREE.Vector3().subVectors(tagA.mesh.position, faceCenter);
-			const proj1A = relPosA.dot(tangent1);
-			const proj2A = relPosA.dot(tangent2);
-			
-			// Accumulate forces
-			let netForce = new THREE.Vector3();
-			
-			for (const tagB of faceTags) {
-				if (tagA === tagB) continue;
-				if (!tagB || !this.tagData.has(tagB.id)) continue;
-				
-				// Calculate relative positioning
-				const relPosB = new THREE.Vector3().subVectors(tagB.mesh.position, faceCenter);
-				const proj1B = relPosB.dot(tangent1);
-				const proj2B = relPosB.dot(tangent2);
-				
-				// Calculate separation in face space
-				const deltaProj1 = proj1A - proj1B;
-				const deltaProj2 = proj2A - proj2B;
-				const faceDist = Math.sqrt(deltaProj1*deltaProj1 + deltaProj2*deltaProj2);
-				
-				if (faceDist < 0.001) continue;
-				
-				// Calculate organization force
-				const forceMag = 0.1 / (faceDist + 0.1);
-				const forceDir = new THREE.Vector3()
-					.addScaledVector(tangent1, deltaProj1)
-					.addScaledVector(tangent2, deltaProj2)
-					.normalize();
-				
-				netForce.addScaledVector(forceDir, forceMag);
-			}
-			
-			// Apply force
-			dataA.velocity.addScaledVector(netForce, dt / dataA.mass);
-		}
 	}
 
 	/**
@@ -875,7 +862,7 @@ export class TagPhysics {
 	}
 
 	/**
-	 * Resolve any remaining intersections
+	 * Resolve any remaining intersections - with hair's width spacing
 	 */
 	resolveIntersections(tags) {
 		for (let i = 0; i < tags.length; i++) {
@@ -902,16 +889,16 @@ export class TagPhysics {
 				
 				direction.normalize();
 				
-				// Prioritize vertical separation
+				// Reduced vertical priority for more organic look
 				if (Math.abs(direction.y) > 0.5) {
 					direction.y *= this.config.verticalPriority;
 					direction.normalize();
 				}
 				
-				// Calculate overlap
+				// Calculate overlap - reduced factor for tighter packing
 				const sizeA = this.getTagSize(dataA.bbox);
 				const sizeB = this.getTagSize(dataB.bbox);
-				const minSeparation = (sizeA + sizeB) * 0.5 + this.config.tagSeparation;
+				const minSeparation = (sizeA + sizeB) * 0.35 + this.config.tagSeparation;
 				const currentDist = posA.distanceTo(posB);
 				const overlap = Math.max(0, minSeparation - currentDist);
 
@@ -974,5 +961,119 @@ export class TagPhysics {
 		this.debug.cubeHelper.quaternion.copy(this.cubeOrientation);
 		
 		this.scene.add(this.debug.cubeHelper);
+	}
+
+	/**
+	 * Organize tags on cube surface
+	 */
+	applySurfaceForces(tags, dt) {
+		// Group tags by face
+		const faceTags = [[], [], [], [], [], []];
+		
+		for (const tag of tags) {
+			if (!tag || !tag.mesh || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+
+			if (data.face >= 0 && data.face < 6) {
+				faceTags[data.face].push(tag);
+			}
+		}
+		
+		// Process each face
+		for (let face = 0; face < 6; face++) {
+			this.organizeFaceTags(faceTags[face], face, dt);
+		}
+	}
+
+	/**
+	 * Organize tags on a specific cube face for optimal distribution
+	 * @param {Array} faceTags - Array of tags on this face
+	 * @param {number} faceIndex - Index of the face (0-5)
+	 * @param {number} dt - Time delta for physics calculations
+	 */
+	organizeFaceTags(faceTags, faceIndex, dt) {
+		if (!faceTags || faceTags.length === 0) return;
+		
+		// Get face normal direction
+		const faceDir = this.faceDirections[faceIndex];
+		
+		// Create perpendicular axes for organization
+		const up = new THREE.Vector3(0, 1, 0);
+		if (Math.abs(faceDir.dot(up)) > 0.9) {
+			// For top/bottom faces, use X axis
+			up.set(1, 0, 0);
+		}
+		
+		const right = new THREE.Vector3().crossVectors(up, faceDir).normalize();
+		const perpUp = new THREE.Vector3().crossVectors(faceDir, right).normalize();
+		
+		// Calculate target position for each tag on the face
+		for (let i = 0; i < faceTags.length; i++) {
+			const tag = faceTags[i];
+			if (!tag || !tag.mesh || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+			
+			// Skip tags in active chains
+			if (data.chainProcessed) continue;
+			
+			// Calculate position relative to cube center and project onto face plane
+			const relPos = new THREE.Vector3().subVectors(tag.mesh.position, this.cubeCentre);
+			
+			// Project onto face plane
+			const distAlongNormal = relPos.dot(faceDir);
+			const projectedPos = new THREE.Vector3().copy(relPos)
+				.addScaledVector(faceDir, -distAlongNormal);
+			
+			// Calculate target position - keep the same projected position but at correct distance
+			const targetDist = this.cubeSize * 0.5;
+			const targetPos = new THREE.Vector3().copy(projectedPos).normalize()
+				.multiplyScalar(targetDist)
+				.add(this.cubeCentre);
+			
+			// For balancing, apply slight force to distribute tags more evenly
+			for (let j = 0; j < faceTags.length; j++) {
+				if (i === j) continue;
+				
+				const otherTag = faceTags[j];
+				if (!otherTag || !otherTag.mesh) continue;
+				
+				// Calculate 2D separation on face plane
+				const otherRelPos = new THREE.Vector3().subVectors(otherTag.mesh.position, this.cubeCentre);
+				const otherProjPos = new THREE.Vector3().copy(otherRelPos)
+					.addScaledVector(faceDir, -otherRelPos.dot(faceDir));
+				
+				const separation = new THREE.Vector3().subVectors(projectedPos, otherProjPos);
+				const dist = separation.length();
+				
+				if (dist < 0.001) continue; // Skip if too close to avoid division by zero
+				
+				// Apply repulsion along face plane
+				const repulsionStrength = Math.min(0.5, 0.2 / Math.max(0.1, dist));
+				const repulsionDir = separation.normalize();
+				
+				// Apply force primarily in the plane of the face
+				targetPos.addScaledVector(repulsionDir, repulsionStrength * this.config.faceBalancing);
+			}
+			
+			// Create movement vector towards target
+			const moveDir = new THREE.Vector3().subVectors(targetPos, tag.mesh.position);
+			const moveDist = moveDir.length();
+			
+			if (moveDist > 0.001) {
+				moveDir.normalize();
+				
+				// Apply force primarily along tag's movement axis
+				const axisAlignment = moveDir.dot(data.movementAxis);
+				const axisAlignedForce = data.movementAxis.clone()
+					.multiplyScalar(axisAlignment * this.config.surfaceAttraction);
+				
+				// Add small lateral force component
+				const lateralForce = moveDir.clone().multiplyScalar(this.config.surfaceAttraction * 0.3);
+				
+				// Apply force with priority to axis-aligned movement
+				data.velocity.addScaledVector(axisAlignedForce, dt * 2.0 / data.mass);
+				data.velocity.addScaledVector(lateralForce, dt * 0.5 / data.mass);
+			}
+		}
 	}
 } 

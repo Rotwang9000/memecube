@@ -33,13 +33,13 @@ export class TagCluster {
 		this.tokenSymbols = new Set(); // Track which tokens we've added
 		this.symbolToTagId = new Map(); // Map symbols to tag IDs
 		
-		// Token update settings
-		this.updateInterval = 6000; // Update every 6 seconds
+		// Token update settings - more frequent updates
+		this.updateInterval = 5000; // Update every 5 seconds (reduced from 6000)
 		this.lastUpdateTime = 0;
 		
-		// Size settings
-		this.minTokenSize = 0.5;
-		this.maxTokenSize = 2.0;
+		// Size settings - narrower range for better cluster cohesion
+		this.minTokenSize = 0.6;  // Increased from 0.5
+		this.maxTokenSize = 1.2;  // Reduced from 2.0
 		
 		// Create container group for compatibility with old code
 		this.cubeGroup = new THREE.Group();
@@ -123,26 +123,40 @@ export class TagCluster {
 					priceChange: tokenData.priceChange?.h24 || 0
 				};
 				
-				// Set tag color based on price change
+				// Set tag color based on price change with improved colors
 				if (tag.mesh && tag.mesh.material) {
 					const priceChange = tokenData.priceChange?.h24 || 0;
-					if (priceChange > 0) {
-						// Green for positive
-						tag.mesh.material.color.setRGB(0.2, 0.8, 0.3);
-						tag.mesh.material.emissive.setRGB(0.1, 0.3, 0.1);
-					} else if (priceChange < 0) {
-						// Red for negative
-						tag.mesh.material.color.setRGB(0.8, 0.2, 0.2);
-						tag.mesh.material.emissive.setRGB(0.3, 0.1, 0.1);
-					} else {
-						// Blue for neutral
-						tag.mesh.material.color.setRGB(0.2, 0.5, 0.8);
-						tag.mesh.material.emissive.setRGB(0.1, 0.2, 0.3);
-					}
+					this.applyPriceChangeColor(tag, priceChange);
 				}
 			}
 		} catch (error) {
 			console.error(`Error adding token ${symbol} to tag cluster:`, error);
+		}
+	}
+	
+	/**
+	 * Apply price change color to tag with improved visuals
+	 * @param {Object} tag - Tag object
+	 * @param {number} priceChange - Price change percentage
+	 */
+	applyPriceChangeColor(tag, priceChange) {
+		if (!tag.mesh || !tag.mesh.material) return;
+		
+		if (priceChange > 0) {
+			// Brighter green for positive (improved from previous values)
+			tag.mesh.material.color.setRGB(0.25, 0.9, 0.35);
+			tag.mesh.material.emissive.setRGB(0.12, 0.35, 0.15);
+			tag.mesh.material.emissiveIntensity = 0.25;
+		} else if (priceChange < 0) {
+			// Brighter red for negative (improved from previous values)
+			tag.mesh.material.color.setRGB(0.9, 0.25, 0.25);
+			tag.mesh.material.emissive.setRGB(0.35, 0.12, 0.12);
+			tag.mesh.material.emissiveIntensity = 0.25;
+		} else {
+			// Brighter blue for neutral (improved from previous values)
+			tag.mesh.material.color.setRGB(0.25, 0.6, 0.9);
+			tag.mesh.material.emissive.setRGB(0.1, 0.25, 0.35);
+			tag.mesh.material.emissiveIntensity = 0.2;
 		}
 	}
 	
@@ -178,24 +192,12 @@ export class TagCluster {
 			const currentSize = tag.mesh ? tag.mesh.scale.x : 1;
 			if (Math.abs(newSize - currentSize) / currentSize > 0.1) {
 				this.tagsManager.tagManager.resizeTag(tagId, newSize);
+			}
 				
-				// Update color based on price change
-				if (tag.mesh && tag.mesh.material) {
-					const priceChange = tokenData.priceChange?.h24 || 0;
-					if (priceChange > 0) {
-						// Green for positive
-						tag.mesh.material.color.setRGB(0.2, 0.8, 0.3);
-						tag.mesh.material.emissive.setRGB(0.1, 0.3, 0.1);
-					} else if (priceChange < 0) {
-						// Red for negative
-						tag.mesh.material.color.setRGB(0.8, 0.2, 0.2);
-						tag.mesh.material.emissive.setRGB(0.3, 0.1, 0.1);
-					} else {
-						// Blue for neutral
-						tag.mesh.material.color.setRGB(0.2, 0.5, 0.8);
-						tag.mesh.material.emissive.setRGB(0.1, 0.2, 0.3);
-					}
-				}
+			// Update color based on price change
+			if (tag.mesh && tag.mesh.material) {
+				const priceChange = tokenData.priceChange?.h24 || 0;
+				this.applyPriceChangeColor(tag, priceChange);
 			}
 		}
 	}
@@ -235,9 +237,10 @@ export class TagCluster {
 		// Clamp between 0 and 1
 		const clampedSize = Math.max(0, Math.min(1, normalizedSize));
 		
-		// Map to size range with wider variance 
-		// Add some randomness to create more interesting structure
-		const randomFactor = 1.0 + (Math.random() * 0.3 - 0.15); // ±15% random variance
+		// More consistent sizing with less randomness for better isometric structure
+		// Reduced random variance from ±15% to ±8%
+		const randomFactor = 1.0 + (Math.random() * 0.16 - 0.08);
+		
 		return (this.minTokenSize + clampedSize * (this.maxTokenSize - this.minTokenSize)) * randomFactor;
 	}
 	
@@ -270,8 +273,8 @@ export class TagCluster {
 				const newSize = this.calculateTokenSize(tag.metadata.marketCap);
 				const currentSize = tag.mesh ? tag.mesh.scale.x : 1;
 				
-				// Only update if significant change
-				if (Math.abs(newSize - currentSize) / currentSize > 0.15) {
+				// Only update if significant change (reduced threshold to 12% from 15%)
+				if (Math.abs(newSize - currentSize) / currentSize > 0.12) {
 					this.tagsManager.tagManager.resizeTag(tagId, newSize);
 				}
 			}

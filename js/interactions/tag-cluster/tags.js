@@ -70,12 +70,13 @@ export class TagsManager {
 		if (size !== null) {
 			finalSize = size;
 		} else {
-			// Generate a somewhat varied random size
-			const baseSize = 0.5 + Math.random() * 0.5;
+			// Generate a more consistent size range for better isometric structure
+			// Narrower size range (0.6-0.9) for more uniform appearance
+			const baseSize = 0.6 + Math.random() * 0.3;
 			
 			// Occasionally create a larger tag (10% chance)
 			if (Math.random() < 0.10) {
-				finalSize = baseSize * (1.2 + Math.random() * 0.3);
+				finalSize = baseSize * (1.1 + Math.random() * 0.2);
 			} else {
 				finalSize = baseSize;
 			}
@@ -116,7 +117,8 @@ export class TagsManager {
 		this.tags.forEach((tag, index) => {
 			if (!tag.creationTime) {
 				// Stagger creation times for existing tags
-				tag.creationTime = currentTime - (this.tags.length - index) * 5000;
+				// More gradual staggering for smoother aging transitions
+				tag.creationTime = currentTime - (this.tags.length - index) * 2000;
 			}
 		});
 		
@@ -131,7 +133,9 @@ export class TagsManager {
 	generateRandomTag() {
 		const randomText = this.getRandomTagText();
 		const randomUrl = `https://example.com/${randomText.toLowerCase()}`;
-		const size = 0.5 + Math.random() * 0.8; // More varied sizes for demo
+		
+		// More consistent size range (0.65-0.85) for better isometric structure
+		const size = 0.65 + Math.random() * 0.2;
 		
 		return {
 			text: randomText,
@@ -148,15 +152,22 @@ export class TagsManager {
 		const prefixes = ['MOON', 'DOGE', 'SHIB', 'APE', 'FLOKI', 'PEPE', 'CAT', 'BABY', 'TURBO', 'SPACE', 'ELON', 'ROCKET', 'BASED', 'CHAD', 'WOJAK', 'MUSK', 'ALPHA', 'DRAGON', 'FIRE', 'DUCK', 'FROG', 'ZERO'];
 		const suffixes = ['COIN', 'TOKEN', 'MOON', 'ROCKET', 'INU', 'SWAP', 'FI', 'CHAIN', 'DAO', 'VERSE', 'MUSK', 'LABS', 'X', 'DOGE', 'PEPE', 'CHAD', 'BANK', 'MONEY', 'GOLD'];
 		
-		const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+		// To create more varied and interesting tag names:
+		// 50% chance of prefix only, 40% chance of prefix+suffix, 10% chance of suffix only
+		const random = Math.random();
 		
-		// 50% chance of adding a suffix
-		if (Math.random() > 0.5) {
+		if (random < 0.5) {
+			// Prefix only
+			return prefixes[Math.floor(Math.random() * prefixes.length)];
+		} else if (random < 0.9) {
+			// Prefix + suffix
+			const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
 			const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
 			return `${prefix}${suffix}`;
+		} else {
+			// Suffix only
+			return suffixes[Math.floor(Math.random() * suffixes.length)];
 		}
-		
-		return prefix;
 	}
 	
 	/**
@@ -186,8 +197,8 @@ export class TagsManager {
 			
 			if (matchingTag && token.marketCap > 0) {
 				// Calculate size based on market cap (logarithmic scale)
-				const minSize = 0.5;
-				const maxSize = 2.0;
+				const minSize = 0.6; // Increased from 0.5 for better visibility
+				const maxSize = 1.2; // Reduced from 2.0 for more cohesive structure
 				
 				// Use logarithmic scale
 				const logMin = Math.log(minMarketCap);
@@ -197,7 +208,7 @@ export class TagsManager {
 				// Normalize to 0-1 range
 				const normalizedValue = (logValue - logMin) / (logMax - logMin);
 				
-				// Calculate new size
+				// Calculate new size with a more compressed range
 				const newSize = minSize + (maxSize - minSize) * normalizedValue;
 				
 				// Resize tag using the new system
@@ -230,8 +241,8 @@ export class TagsManager {
 		const currentTime = Date.now();
 		const timeSinceLastUpdate = currentTime - this.lastAgeUpdateTime;
 		
-		// Skip if not enough time has passed
-		if (timeSinceLastUpdate < 5000) return; // 5 seconds
+		// Reduced update interval from 5000ms to 3000ms for more responsive aging
+		if (timeSinceLastUpdate < 3000) return; // 3 seconds
 		
 		this.lastAgeUpdateTime = currentTime;
 		
@@ -245,9 +256,9 @@ export class TagsManager {
 			// Calculate age as a 0-1 value (1 = newest, 0 = oldest)
 			const age = (currentTime - tag.creationTime) / 1000; // Age in seconds
 			
-			// Apply age effects once every minute for the first 10 minutes
-			// After that, age more slowly (every 5 minutes)
-			const agingThreshold = age < 600 ? 60 : 300; // seconds
+			// More frequent aging effects 
+			// After initial 300 seconds (5 min), age more slowly
+			const agingThreshold = age < 300 ? 45 : 180; // seconds
 			
 			if (age > 0 && age % agingThreshold < 5) {
 				// Position in the aging queue (oldest first, newest last)
@@ -271,13 +282,13 @@ export class TagsManager {
 	 * @returns {number} New size
 	 */
 	calculateSizeByAge(originalSize, agePosition) {
-		// Older tags should be smaller
-		// For the oldest tag (agePosition = 0), size is reduced to 40%
+		// Older tags should be smaller but maintain minimum size for visibility
+		// For the oldest tag (agePosition = 0), size is reduced to 50% (up from 40%)
 		// For the newest tag (agePosition = 1), size stays at 100%
-		const minSizeFactor = 0.4;
+		const minSizeFactor = 0.5; // Increased from 0.4 for better visibility
 		const sizeFactor = minSizeFactor + (1 - minSizeFactor) * agePosition;
 		
 		// Calculate new size but don't go below minimum
-		return Math.max(0.2, originalSize * sizeFactor);
+		return Math.max(0.3, originalSize * sizeFactor);
 	}
 } 

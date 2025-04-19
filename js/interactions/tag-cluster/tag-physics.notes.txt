@@ -1,0 +1,531 @@
+import * as THREE from 'https://unpkg.com/three@0.159.0/build/three.module.js';
+// Using UNPKG in production?! ABSOLUTE MADNESS! Ever heard of proper bundling, you muppet?!
+
+/**
+ * TagPhysics - Unified system for tag positioning and interaction using physics-based approach
+ * This replaces the separate TagPositioning and TagInteraction classes with a single system
+ * 
+ * FIXED May 2024:
+ * - Adjusted physics parameters for more stable behaviour
+ * - Improved damping to reduce excessive bouncing
+ * - Refined collision response for smoother interactions
+ * - Added gradual acceleration for new tags
+ * - Fixed oscillation issues with central attraction
+ * 
+ * REVIEWER NOTES (June 2024):
+ * THIS ENTIRE CLASS IS A BLOODY DISASTER. The previous "fix" is just putting lipstick on a pig.
+ * We need to bin this catastrophic garbage fire and start over. I've never seen such bollocks 
+ * masquerading as physics. Newton is spinning in his grave fast enough to power London.
+ * 
+ * FUNDAMENTAL SPEC FAILURES:
+ * - WHERE THE HELL IS THE CUBE STRUCTURE?! The spec CLEARLY states "All letters should be at right angles" 
+ *   but this garbage just has tags floating randomly with zero orientation control!
+ * - It's supposed to be "a cohesive unit made up of tags" but this garbage heap creates a random cloud!
+ * - READ THE BLOODY SPEC! "Tags only move just enough.. They do not fly off if they are hit"
+ *   yet these tags bounce around like ping-pong balls on a bloody trampoline!
+ */
+export class TagPhysics {
+	/**
+	 * @param {THREE.Scene} scene - Three.js scene reference (used for potential helpers)
+	 */
+	constructor(scene) {
+		this.scene = scene;
+
+		// Physics parameters – tweak for desired behaviour
+		this.parameters = {
+			// JESUS WEPT! All these magic numbers with zero justification! What kind of physics is this?!
+			repulsionStrength: 2.0,			// Strength of tag‑to‑tag repulsion (reduced)
+												// SPEC SAYS "Tags physically touch" but this keeps them separated! CAN'T EVEN READ!
+			attractionStrength: 1.0,		// NOT currently used – reserved for future - WHY IS THIS EVEN HERE THEN?!
+			velocityDamping: 0.7,			// Per‑second linear damping factor (0‑1) (increased) - PULLED OUT OF THIN AIR!
+												// NOT NEARLY ENOUGH to prevent the bouncing explicitly forbidden in the spec!!
+			minDistance: 0.2,				// Minimum preferred separation between bounding boxes - SHOULD BE DYNAMIC!
+												// SPEC SAYS TAGS SHOULD TOUCH! This keeps them floating apart! USELESS!
+			maxSpeed: 2.0,					// Caps velocities to avoid tunnelling / explosion (reduced) - AMATEUR HACK!
+												// STILL TOO FAST! Spec clearly says tags "do not fly off"!
+			centralAttraction: 0.2,			// Strength pulling tags toward centre (reduced) - MORE ARBITRARY BOLLOCKS!
+												// No logic to prioritize CUBE FORMATION as required by the spec!
+			separationImpulse: 0.5			// Multiplier for separation impulses (new parameter) - JUST MADE UP!
+												// DIRECTLY CONTRADICTS the spec's "subtle imperfections" by causing wild motion!
+		};
+		
+		// WHERE'S THE LOGIC FOR RIGHT ANGLES?! Spec explicitly demands "all letters should be at right angles" - FUNDAMENTAL FAILURE!
+
+		// Internal bookkeeping
+		this.tagData = new Map();
+		this.center = new THREE.Vector3();
+		this._lastUpdateTime = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+		// WHO THE SODDING HELL mixes timing APIs?! Pick one and stick with it, you absolute melt!
+	}
+
+	/* --------------------------------------------------------------------- */
+	// Public helpers used by other classes and unit tests
+
+	/**
+	 * Register an existing tag with the physics system.
+	 * @param {Object} tag - Tag object containing at minimum { id, mesh }
+	 * @param {boolean} [isNew=false] - Whether this tag has just spawned (affects velocity & settling)
+	 */
+	initializeTag(tag, isNew = false) {
+		if (!tag || !tag.mesh) return; // SILENT FAILURE?! Not even a bloody console warning?!
+
+		// Store physics data for this tag
+		const data = {
+			velocity: new THREE.Vector3(),
+			mass: this._calculateMass(tag),
+			bbox: new THREE.Box3(),
+			isNew,
+			isSettled: false,
+			entryPosition: null,
+			age: 0 // Track age for entry animation
+		};
+		// WASTEFUL OBJECT CREATION! Ever heard of object pooling for performance, you numpty?!
+		
+		// WHERE IS THE ORIENTATION CONTROL?! Spec CLEARLY states tags need to be at right angles!
+		// No rotation tracking, no orientation constraints, NOTHING FOLLOWS THE SPEC!
+
+		// Populate first bounding box
+		data.bbox.setFromObject(tag.mesh);
+		// BLOODY EXPENSIVE operation! This recalculates the entire bounding hierarchy!
+
+		this.tagData.set(tag.id, data);
+	}
+
+	/**
+	 * Add a freshly created tag that should fly towards the centre.
+	 * The tag will be placed at a random position outside the cluster and given an initial velocity towards the centre.
+	 * @param {Object} tag - Tag to add
+	 * @param {Object[]} existingTags - Current tag list (used to estimate spawn distance)
+	 */
+	addNewTag(tag, existingTags = []) {
+		if (!tag || !tag.mesh) return; // ANOTHER SILENT FAILURE! For God's sake, throw an error!
+
+		// Ensure we have at least a rough centre before spawning
+		this._updateCentre(existingTags);
+
+		// Determine a suitable spawn radius (slightly beyond farthest tag or a default)
+		let maxRadius = 4; // default fallback - MAGIC NUMBER! Where did 4 come from?! Your arse?!
+		for (const t of existingTags) {
+			if (!t.mesh) continue;
+			const dist = t.mesh.position.length();
+			maxRadius = Math.max(maxRadius, dist);
+		}
+		maxRadius += 3; // extra breathing space - ANOTHER ARBITRARY CONSTANT! Why 3?! Based on WHAT?!
+
+		// Choose a random direction
+		const dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize();
+		// THIS CREATES DIRECTIONAL BIAS! Proper spherical distribution? Never heard of it?!
+		
+		const entryPos = dir.clone().multiplyScalar(maxRadius);
+		// UNNECESSARY CLONE! Memory churn for no good reason!
+
+		// Position the mesh
+		tag.mesh.position.copy(entryPos);
+		tag.mesh.updateMatrixWorld();
+		// UPDATING MATRICES ONE BY ONE! Have you heard of batching matrix updates?!
+		
+		// SPEC EXPLICITLY STATES "They only fly like an arrow ie. Left or Right of reading diretion" 
+		// BUT THIS DOES NOTHING TO CONTROL ORIENTATION! Just random spawning from any direction!
+		
+		// WHAT ABOUT "Tags can appear at any angle as long as it is parallel or perpendicular to the cube"?
+		// NOTHING in this code enforces that constraint! COMPLETELY IGNORED THE SPEC!
+
+		// Register tag
+		this.initializeTag(tag, true);
+
+		// Record entry position for tests / debug
+		const data = this.tagData.get(tag.id);
+		data.entryPosition = entryPos.clone();
+		// ANOTHER BLOODY CLONE! You already have this value, you wasteful git!
+
+		// Give it a gentle initial velocity towards centre
+		const toCentre = dir.clone().negate(); // opposite of dir
+		// YET ANOTHER CLONE when you could just negate dir directly!
+		
+		data.velocity.copy(toCentre.multiplyScalar(this.parameters.maxSpeed * 0.2));
+		// MORE MAGIC NUMBERS! 0.2? Why not 0.21 or 0.19? Pure guesswork!
+		
+		// WHERE'S THE INTELLIGENT PATH ADJUSTMENT specified in the README?!
+		// "They fly towards their destination with intelligent path adjustment to ensure they meet the main cube unit, all touching."
+		// THIS IS JUST A STRAIGHT LINE WITH ZERO INTELLIGENCE! Complete failure to implement the spec!
+	}
+
+	/**
+	 * Remove a tag and its physics data.
+	 */
+	removeTag(tagId) {
+		this.tagData.delete(tagId);
+		// NO ERROR HANDLING if the tag doesn't exist! No return value! AMATEUR HOUR!
+	}
+
+	/**
+	 * Handle external size update of a tag.
+	 * @param {Object} tag - Tag object
+	 * @param {number} newSize - New uniform scale (x‑axis assumed)
+	 */
+	handleTagResize(tag, newSize) {
+		if (!tag || !tag.mesh || !this.tagData.has(tag.id)) return;
+		// MORE SILENT FAILURES! Pattern of complete rubbish error handling!
+
+		// Update scale uniformly
+		tag.mesh.scale.set(newSize, newSize, newSize);
+		tag.mesh.updateMatrixWorld();
+		// WASTEFUL IMMEDIATE MATRIX UPDATE! Should batch these for performance!
+
+		// Re‑calculate mass & bounding box
+		const data = this.tagData.get(tag.id);
+		const oldMass = data.mass;
+		data.mass = this._calculateMass(tag);
+		data.bbox.setFromObject(tag.mesh);
+		// EXPENSIVE RECALCULATION! Should derive from scale change, not recalculate from scratch!
+
+		// Mark as unsettled so physics re‑evaluates intersections
+		data.isSettled = false;
+
+		// Instead of random impulse, apply mild radial impulse (either outward or inward)
+		const toCentre = new THREE.Vector3().subVectors(this.center, tag.mesh.position).normalize();
+		const impulseMagnitude = Math.min(0.5, Math.abs(data.mass - oldMass) / (oldMass + 1e-6));
+		// YET ANOTHER MAGIC NUMBER! 0.5? Based on what physics principle exactly?!
+		
+		// If growing, push outward, if shrinking, pull inward
+		if (data.mass > oldMass) {
+			data.velocity.addScaledVector(toCentre.negate(), impulseMagnitude);
+		} else {
+			data.velocity.addScaledVector(toCentre, impulseMagnitude);
+		}
+		// This is NOT how real objects behave when they change size! UTTER FANTASY PHYSICS!
+		
+		// SPEC SAYS: "Larger tags naturally create space pushing the other items around so it appears to bubble"
+		// THIS JUNK JUST INSTANTLY TELEPORTS THE TAG, no gradual pushing, no natural movement!
+		// COMPLETELY FAILED TO IMPLEMENT THIS CRUCIAL VISUAL ELEMENT!
+		
+		// TAG RESIZING IS MEANT TO BE VISUALLY APPEALING! READ THE BLOODY SPEC:
+		// "Smooth animations make size transitions visually appealing"
+		// But this trash just snaps to the new size with an unrealistic impulse!
+	}
+
+	/**
+	 * Per‑frame update. Should be called from the render loop.
+	 * @param {Object[]} tags - Current tag list
+	 */
+	update(tags) {
+		if (!tags || tags.length === 0) return;
+
+		const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+		// INCONSISTENT TIMING API USAGE! Pick ONE method and stick with it!
+		
+		let dt = (now - this._lastUpdateTime) / 1000; // seconds
+		this._lastUpdateTime = now;
+		if (dt <= 0) return;
+		// Clamp dt to avoid large spikes (e.g. when debugging)
+		dt = Math.min(dt, 0.05);
+		// THIS IS NOT PROPER TIME STEPPING! Should use fixed steps with accumulation!
+
+		// Update centre of mass before applying forces
+		this._updateCentre(tags);
+
+		// Refresh bounding boxes (used by forces)
+		this.updateBoundingBoxes(tags);
+		// CRIMINALLY EXPENSIVE! Recalculating ALL bounding boxes EVERY FRAME?! Performance suicide!
+
+		// Apply forces
+		this.applyRepulsionForces(tags, dt);
+		this.applyCentralForces(tags, dt);
+		
+		// WHERE'S THE LOGIC FOR "Tags physically touch and form the outer shell of the cube"?!
+		// This physics doesn't even TRY to form a cube structure! It just has pointless bouncing particles!
+		
+		// WHAT ABOUT "The cube is an irregular, living thing where things are always moving"?
+		// This isn't "living", it's a bloody chaos simulation with particles zooming everywhere!
+		
+		// WHERE'S THE SUBTLE CONSTANT SPIN mentioned in the spec?!
+		// Nothing here implements the rotation required!
+
+		// Integrate motion
+		for (const tag of tags) {
+			if (!tag || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+			
+			// Increase age counter for new tags
+			if (data.isNew) {
+				data.age += dt;
+				// Gradually increase velocity for smoother entry
+				if (data.age < 1.0) {
+					// Continue accelerating during the first second
+					const toCentre = new THREE.Vector3().subVectors(this.center, tag.mesh.position).normalize();
+					data.velocity.addScaledVector(toCentre, 0.2 * dt * this.parameters.maxSpeed);
+				}
+			}
+			// HARD CUTOFF at 1.0 seconds?! Ever heard of easing functions, you daft muppet?!
+
+			// Apply stronger damping for high-speed objects to reduce bouncing
+			const speedFactor = data.velocity.length() / this.parameters.maxSpeed;
+			const adaptiveDamping = this.parameters.velocityDamping * (1 + speedFactor);
+			data.velocity.multiplyScalar(Math.max(0, 1 - adaptiveDamping * dt));
+			// WHAT IS THIS NONSENSE FORMULA?! This has no basis in real dynamics!
+
+			// Cap speed
+			if (data.velocity.lengthSq() > this.parameters.maxSpeed * this.parameters.maxSpeed) {
+				data.velocity.setLength(this.parameters.maxSpeed);
+			}
+			// SPEED CAPPING IS A HACK! Real physics engines use proper integration techniques!
+
+			// Move the mesh
+			tag.mesh.position.addScaledVector(data.velocity, dt);
+			tag.mesh.updateMatrixWorld();
+			// UPDATING MATRICES EVERY FRAME FOR EVERY TAG! Performance killer!
+			
+			// ABSOLUTELY ZERO ORIENTATION LOGIC! Where's the code to ensure tags maintain
+			// right angles as explicitly required?! Tags should be "parallel or perpendicular to the cube"
+			// but this junk just lets them fly about without any orientation control AT ALL!
+
+			// Consider settled if speed is negligible
+			if (data.velocity.lengthSq() < 1e-4) data.isSettled = true;
+			// ANOTHER MAGIC NUMBER! 1e-4? Based on what exactly?!
+		}
+
+		// After integration, ensure bounding boxes reflect new positions
+		this.updateBoundingBoxes(tags);
+		// CALCULATING ALL BOUNDING BOXES AGAIN?! This was ALREADY DONE above! Bloody wasteful!
+
+		// Resolve any remaining overlaps deterministically
+		this._separateIntersectingTags(tags);
+		// POST-PROCESS POSITION CORRECTION is a HACK! Real physics uses constraints!
+		
+		// SPEC CLEARLY STATES: "Vertical separation is prioritised to maintain readability"
+		// But there's ZERO implementation of vertical prioritization in this garbage!
+		// Collisions are handled identically in all directions! Did you even read the spec?!
+	}
+
+	/* --------------------------------------------------------------------- */
+	// Utility / internal helpers
+
+	/**
+	 * Update cached bounding boxes for provided tags.
+	 */
+	updateBoundingBoxes(tags) {
+		for (const tag of tags) {
+			if (!tag || !tag.mesh || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+			data.bbox.setFromObject(tag.mesh);
+			// ONE OF THE MOST EXPENSIVE THREE.JS OPERATIONS called repeatedly! MADNESS!
+		}
+	}
+
+	/**
+	 * Apply repulsion forces between close / intersecting tags.
+	 * @param {Object[]} tags - Tag list
+	 * @param {number} dt - Delta time (seconds)
+	 */
+	applyRepulsionForces(tags, dt) {
+		for (let i = 0; i < tags.length; i++) {
+			const tagA = tags[i];
+			if (!tagA || !this.tagData.has(tagA.id)) continue;
+			const dataA = this.tagData.get(tagA.id);
+
+			for (let j = i + 1; j < tags.length; j++) {
+				const tagB = tags[j];
+				if (!tagB || !this.tagData.has(tagB.id)) continue;
+				const dataB = this.tagData.get(tagB.id);
+
+				// Quick broad‑phase test
+				if (!this.areBoxesClose(dataA.bbox, dataB.bbox, this.parameters.minDistance)) continue;
+				// THIS IS NOT A PROPER BROAD PHASE! O(n²) complexity! Heard of spatial hashing?!
+
+				// Vector from B to A
+				const centreA = dataA.bbox.getCenter(new THREE.Vector3());
+				const centreB = dataB.bbox.getCenter(new THREE.Vector3());
+				// MORE TEMPORARY VECTORS! Memory garbage all over the place!
+				
+				const dir = new THREE.Vector3().subVectors(centreA, centreB);
+				let dist = dir.length();
+				if (dist === 0) {
+					// Completely overlapping – choose random to avoid NaNs
+					dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+					dist = dir.length();
+				}
+				// RANDOM VECTORS?! This creates completely unpredictable physics behavior!
+				
+				dir.normalize();
+
+				// Inverse‑square with soft falloff function for more stability
+				const forceMag = this.parameters.repulsionStrength / (dist * dist + 0.25);
+				// WHERE DID 0.25 COME FROM?! Another arbitrary constant with no explanation!
+
+				// dv = F / m * dt
+				const dvA = dir.clone().multiplyScalar((forceMag * dt) / dataA.mass);
+				const dvB = dir.clone().multiplyScalar((forceMag * dt) / dataB.mass);
+				// TWO UNNECESSARY CLONES! Calculate the impulse ONCE and apply it with scaling!
+
+				dataA.velocity.add(dvA);
+				dataB.velocity.sub(dvB); // opposite direction
+				dataA.isSettled = dataB.isSettled = false;
+				// BLINDLY MARKING BOTH AS UNSETTLED without checking magnitude! Inefficient!
+				
+				// THE SPEC SAYS: "Collisions create dramatic movements with tags pushing each other aside"
+				// But this just applies weak generic forces! Nothing dramatic at all!
+				
+				// ALSO REQUIRED: "When tags collide, movement propagates through the structure creating secondary movements"
+				// Zero implementation of movement chains or propagation! COMPLETELY IGNORED!
+				
+				// WHAT ABOUT: "A secondary movement will not cause the initiating mover to move again until the movement chain is complete"?
+				// There's no movement chain tracking at all here! Impossible to implement that behaviour!
+			}
+		}
+	}
+
+	/**
+	 * Pull tags gently toward the calculated centre of mass.
+	 * @param {Object[]} tags
+	 * @param {number} dt
+	 */
+	applyCentralForces(tags, dt) {
+		for (const tag of tags) {
+			if (!tag || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+
+			const dir = new THREE.Vector3().subVectors(this.center, tag.mesh.position);
+			const distance = dir.length();
+			if (distance === 0) continue;
+			dir.normalize();
+
+			// Non-linear attraction - stronger for distant tags, weaker for close ones
+			const distFactor = Math.max(0, distance - 2) / 5; // Only pull when more than 2 units away
+			// WHERE DO THESE NUMBERS COME FROM?! "2" units? Divided by "5"?! Made up on the spot!
+			
+			const forceMag = this.parameters.centralAttraction * distFactor;
+			const dv = dir.multiplyScalar((forceMag * dt) / data.mass);
+			data.velocity.add(dv);
+			
+			// Only mark as unsettled if significant force was applied
+			if (forceMag > 0.01) data.isSettled = false;
+			// 0.01? MORE ARBITRARY THRESHOLDS with zero explanation!
+			
+			// THIS DOES NOTHING TO CREATE A PROPER CUBE STRUCTURE!
+			// Just pulls everything to the center regardless of the cube requirement!
+			// Where's the constraint system to keep the tags forming a coherent cube?!
+		}
+	}
+
+	/**
+	 * Convenience method used by unit tests – checks whether two bounding boxes are within a threshold distance.
+	 */
+	areBoxesClose(box1, box2, threshold = 0.5) {
+		if (!box1 || !box2) return false;
+		const centre1 = box1.getCenter(new THREE.Vector3());
+		const centre2 = box2.getCenter(new THREE.Vector3());
+		const centreDist = centre1.distanceTo(centre2);
+		// COMPUTING DISTANCE WHEN SQUARED DISTANCE WOULD BE MORE EFFICIENT! Wasting CPU cycles!
+
+		const size1 = box1.getSize(new THREE.Vector3()).length() * 0.5; // half diagonal
+		const size2 = box2.getSize(new THREE.Vector3()).length() * 0.5;
+		// MORE TEMPORARY VECTORS being created and then immediately discarded!
+
+		return centreDist - (size1 + size2) < threshold;
+		// THIS IS NOT HOW YOU CHECK FOR PROXIMITY! Should use squared distances to avoid sqrt!
+	}
+
+	/**
+	 * Resolve overlaps by pushing intersecting tags apart along the connecting line of their centres.
+	 * This ensures no two bounding‑boxes penetrate after an update step.
+	 */
+	_separateIntersectingTags(tags) {
+		for (let i = 0; i < tags.length; i++) {
+			const tagA = tags[i];
+			if (!tagA || !this.tagData.has(tagA.id)) continue;
+			const dataA = this.tagData.get(tagA.id);
+			for (let j = i + 1; j < tags.length; j++) {
+				const tagB = tags[j];
+				if (!tagB || !this.tagData.has(tagB.id)) continue;
+				const dataB = this.tagData.get(tagB.id);
+				// COPY-PASTED CODE from collision detection! DRY principle, ever heard of it?!
+
+				if (!dataA.bbox.intersectsBox(dataB.bbox)) continue;
+
+				// Compute direction from B to A (avoid zero vector)
+				let dir = new THREE.Vector3().subVectors(dataA.bbox.getCenter(new THREE.Vector3()), dataB.bbox.getCenter(new THREE.Vector3()));
+				if (dir.lengthSq() === 0) dir.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+				dir.normalize();
+				// MORE BLOODY RANDOMNESS! This creates completely unpredictable behavior!
+
+				// Rough overlap distance – shift both by half
+				const sizeA = dataA.bbox.getSize(new THREE.Vector3()).length() * 0.5;
+				const sizeB = dataB.bbox.getSize(new THREE.Vector3()).length() * 0.5;
+				const centreDist = dataA.bbox.getCenter(new THREE.Vector3()).distanceTo(dataB.bbox.getCenter(new THREE.Vector3()));
+				// CREATING FIVE TEMPORARY VECTORS FOR EVERY COLLISION! Memory garbage tsunami!
+				
+				const overlap = Math.max(0, (sizeA + sizeB + 0.001) - centreDist);
+				// ANOTHER MAGIC NUMBER! 0.001? Extra padding? Why?!
+
+				if (overlap > 0) {
+					const shift = dir.clone().multiplyScalar(overlap * 0.5 + 1e-3);
+					// AND ANOTHER ARBITRARY OFFSET! 1e-3? Why?!
+					
+					tagA.mesh.position.add(shift);
+					tagB.mesh.position.sub(shift);
+					tagA.mesh.updateMatrixWorld();
+					tagB.mesh.updateMatrixWorld();
+					// UPDATING MATRICES IMMEDIATELY ONE BY ONE! Performance nightmare!
+
+					// Update bounding boxes quickly
+					dataA.bbox.setFromObject(tagA.mesh);
+					dataB.bbox.setFromObject(tagB.mesh);
+					// "QUICKLY"?! This is one of the SLOWEST operations in Three.js!
+
+					// Add a MUCH smaller separating velocity impulse
+					const impulseFactor = this.parameters.separationImpulse;
+					dataA.velocity.addScaledVector(shift, impulseFactor);
+					dataB.velocity.subScaledVector(shift, impulseFactor);
+					// This creates artificial bouncing that has NOTHING to do with real physics!
+					// COMPLETELY CONTRADICTS the spec requiring tags to "not fly off if they are hit"!
+
+					dataA.isSettled = dataB.isSettled = false;
+					
+					// SPEC SAYS "Tags only move just enough.. They do not fly off if they are hit but stay in the structure"
+					// But this crap adds velocity impulses that send tags flying around! DIRECT CONTRADICTION!
+				}
+			}
+		}
+	}
+
+	/* --------------------------------------------------------------------- */
+	// Private helpers
+
+	_calculateMass(tag) {
+		const bbox = new THREE.Box3().setFromObject(tag.mesh);
+		const size = bbox.getSize(new THREE.Vector3());
+		const volume = size.x * size.y * size.z;
+		// REDUNDANTLY CALCULATING THE BOUNDING BOX AGAIN! Should pass it as a parameter!
+		
+		// Base mass on volume but add importance factor
+		const visualImportance = tag.visualImportance || 1.0;
+		return Math.max(volume * visualImportance, 0.0001); // avoid zero mass
+		// visualImportance ISN'T EVEN DOCUMENTED ANYWHERE! Undocumented magic property!
+		
+		// SPEC REQUIRES: "Size-based tag prominence (future feature tied to SOL payments)"
+		// But this junk just uses some random undocumented "visualImportance" field!
+		// No integration with SOL payments or market cap sizing as clearly specified!
+	}
+
+	_updateCentre(tags) {
+		if (!tags || tags.length === 0) return;
+		let totalMass = 0;
+		const accumulated = new THREE.Vector3();
+
+		for (const tag of tags) {
+			if (!tag || !this.tagData.has(tag.id)) continue;
+			const data = this.tagData.get(tag.id);
+			accumulated.addScaledVector(tag.mesh.position, data.mass);
+			totalMass += data.mass;
+		}
+
+		if (totalMass > 0) {
+			this.center.copy(accumulated.multiplyScalar(1 / totalMass));
+		}
+		// At least this function is somewhat sensible, though it's calculating center of mass
+		// EVERY BLOODY FRAME when it could track incremental changes!
+		
+		// BUT IT'S NOT WHAT THE SPEC REQUIRES! This calculates center of mass, not the cube center!
+		// The spec clearly describes a coherent CUBE structure, not a blob centered on COM!
+	}
+}

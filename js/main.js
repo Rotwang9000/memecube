@@ -22,17 +22,9 @@ class MemeCube {
 		this.lastCameraPosition = null;
 		this.lastCameraQuaternion = null;
 		
-		// Sample initial tags for demo purposes
-		this.initialTags = [
-			{ text: 'DOGE', url: 'https://dogecoin.com', size: 1.2 },
-			{ text: 'SHIB', url: 'https://shibatoken.com', size: 1.0 },
-			{ text: 'PEPE', url: 'https://www.pepe.vip', size: 1.4 },
-			{ text: 'FLOKI', url: 'https://floki.com', size: 0.9 },
-			{ text: 'BONK', url: 'https://bonkcoin.com', size: 1.3 },
-			{ text: 'WOJAK', url: 'https://wojaktoken.com', size: 1.1 },
-			{ text: 'MOON', url: 'https://moontoken.io', size: 1.2 },
-			{ text: 'APE', url: 'https://apecoin.com', size: 1.0 },
-		];
+		// We'll use DexScreener data instead of hardcoded tags
+		this.initialTokens = [];
+		this.maxInitialTokens = 15; // Limit to 15 initial tokens
 		
 		this.init();
 	}
@@ -47,9 +39,28 @@ class MemeCube {
 		// Initialize controls
 		this.controls = initControls(this.scene.camera, this.canvas);
 		
-		// Add initial demo tags to the cube
-		for (const tag of this.initialTags) {
-			await this.tagsManager.addTag(tag.text, tag.url, tag.size);
+		// Initialize DexScreener module first to get token data
+		await this.initDexScreener();
+		
+		// Add initial tags from DexScreener data
+		await this.addInitialTokensFromDexScreener();
+		
+		// If we couldn't get DexScreener data and have no tags, add some fallback tags
+		if (this.tagsManager.tags.length === 0) {
+			console.log("No tags added yet - adding fallback tags");
+			
+			// Fallback tags with consistent sizing for isometric structure
+			const fallbackTags = [
+			
+			];
+			
+			// Add fallback tags with small delays for better positioning
+			for (const tag of fallbackTags) {
+				await this.tagsManager.addTag(tag.text, tag.url, tag.size);
+				await new Promise(resolve => setTimeout(resolve, 50));
+			}
+			
+			this.utils.showTemporaryMessage('Using fallback tokens for demo');
 		}
 		
 		// Initialize tag age system to enable shrinking and inward movement
@@ -64,18 +75,10 @@ class MemeCube {
 		// Add information button
 		this.setupInfoButton();
 		
-		// Initialize DexScreener module with scene reference for 3D visualizations
-		await this.initDexScreener();
-		
-		// Start demo mode if enabled
-		if (this.demoMode) {
+		// Start demo mode if enabled or if we have very few tags
+		if (this.demoMode || this.tagsManager.tags.length < 5) {
 			this.startDemoMode();
 		}
-		
-		// Auto-initialize demo token after 3 seconds
-		setTimeout(() => {
-			this.showDemoToken();
-		}, 3000);
 		
 		// Add mouse event listeners for interaction
 		this.setupMouseEvents();
@@ -125,6 +128,65 @@ class MemeCube {
 				this.utils.showTemporaryMessage('Failed to add token to cube');
 			}
 		});
+	}
+	
+	/**
+	 * Add initial tokens from DexScreener data
+	 */
+	async addInitialTokensFromDexScreener() {
+		// Check if we have token data from DexScreener
+		if (!this.dexScreenerManager || !this.dexScreenerManager.dataProcessor) {
+			console.warn("DexScreener data not available for initial tags");
+			return;
+		}
+		
+		try {
+			// Get token data or refresh if needed
+			let tokenData = this.dexScreenerManager.dataProcessor.data;
+			
+			// If no data available yet, refresh
+			if (!tokenData || tokenData.length === 0) {
+				tokenData = await this.dexScreenerManager.dataProcessor.refreshAllTokenData();
+			}
+			
+			// Still no data? Use demo mode
+			if (!tokenData || tokenData.length === 0) {
+				console.warn("No token data available, using demo mode");
+				this.startDemoMode();
+				return;
+			}
+			
+			// Limit number of initial tokens
+			const tokensToAdd = tokenData.slice(0, this.maxInitialTokens);
+			
+			// Add each token with small delay for better physics
+			for (const token of tokensToAdd) {
+				if (!token.baseToken?.symbol) continue;
+				
+				const symbol = token.baseToken.symbol;
+				const url = token.url || `https://dexscreener.com/${token.chainId || 'eth'}/${token.pairAddress || ''}`;
+				
+				// Calculate size based on market cap
+				let size = 0.7; // Default size
+				if (token.marketCap && this.dexScreenerManager.calculateTokenSize) {
+					size = this.dexScreenerManager.calculateTokenSize(token);
+				}
+				
+				// Add tag
+				await this.tagsManager.addTag(symbol, url, size);
+				
+				// Small delay to allow physics to position properly
+				await new Promise(resolve => setTimeout(resolve, 50));
+			}
+			
+			// Store added tokens reference
+			this.initialTokens = tokensToAdd;
+			
+			this.utils.showTemporaryMessage(`Added ${tokensToAdd.length} tokens from DexScreener!`);
+		} catch (error) {
+			console.error("Error adding initial tokens from DexScreener:", error);
+			this.startDemoMode(); // Fallback to demo mode
+		}
 	}
 	
 	setupFormSubmission() {
@@ -274,7 +336,7 @@ class MemeCube {
 		
 		try {
 			// If we don't have token data yet, fetch it
-			if (this.dexScreenerManager.tokenData.length === 0) {
+			if (!this.dexScreenerManager.tokenData || this.dexScreenerManager.tokenData.length === 0) {
 				await this.dexScreenerManager.refreshAllTokenData();
 			}
 			
@@ -290,7 +352,7 @@ class MemeCube {
 			}
 			
 			// If no token found with complete data, use the first one
-			if (!demoToken && this.dexScreenerManager.tokenData.length > 0) {
+			if (!demoToken && this.dexScreenerManager.tokenData && this.dexScreenerManager.tokenData.length > 0) {
 				demoToken = this.dexScreenerManager.tokenData[0];
 			}
 			
@@ -307,12 +369,12 @@ class MemeCube {
 			}
 			
 			// Ensure visualizations are visible
-			if (!this.dexScreenerManager.showVisualizations) {
+			if (this.dexScreenerManager.showVisualizations === false) {
 				this.dexScreenerManager.toggleVisualizations();
 			}
 			
 			// Update scoreboard
-			if (this.dexScreenerManager.tokenScoreboard && this.dexScreenerManager.tokenData ) {
+			if (this.dexScreenerManager.tokenScoreboard && this.dexScreenerManager.tokenData) {
 				// Create an array with the demo token and a few more if available
 				const displayTokens = [demoToken];
 				
@@ -332,19 +394,32 @@ class MemeCube {
 				await this.dexScreenerManager.fetchAndUpdateTokenChart(demoToken);
 			}
 			
-			// Add token to cube
+			// Get token symbol
 			const tokenSymbol = demoToken.baseToken?.symbol || demoToken.tokenAddress?.substring(0, 8) || 'DEMO';
 			
-			// Calculate size but ensure it's visible
-			const tokenSize = Math.max(0.6, this.dexScreenerManager.calculateTokenSize(demoToken));
-			
-			await this.tagsManager.addTag(
-				tokenSymbol,
-				demoToken.url || '#',
-				tokenSize
+			// Check if token is already in cluster
+			const existingTag = this.tagsManager.tags.find(tag => 
+				tag.originalName === tokenSymbol || 
+				tag.name === `$${tokenSymbol}`
 			);
 			
-			this.utils.showTemporaryMessage(`Showing demo token: ${tokenSymbol}`);
+			if (existingTag) {
+				// Token already exists, just provide visual feedback
+				this.tagsManager.tagManager.pulseTag(existingTag);
+				this.utils.showTemporaryMessage(`Token $${tokenSymbol} is already in the cluster!`);
+			} else {
+				// Calculate size but ensure it's visible
+				const tokenSize = Math.max(0.6, this.dexScreenerManager.calculateTokenSize(demoToken));
+				
+				// Add new token to cluster
+				await this.tagsManager.addTag(
+					tokenSymbol,
+					demoToken.url || '#',
+					tokenSize
+				);
+				
+				this.utils.showTemporaryMessage(`Showing demo token: $${tokenSymbol}`);
+			}
 		} catch (error) {
 			console.error('Error showing demo token:', error);
 			this.utils.showTemporaryMessage('Error loading demo token');
@@ -357,22 +432,41 @@ class MemeCube {
 			clearInterval(this.demoInterval);
 		}
 		
-		// Add a random tag every 3-6 seconds
+		// Add a random tag every 4-7 seconds (slightly slower for better positioning)
 		this.demoInterval = setInterval(async () => {
 			// Generate a random tag
 			const randomTag = this.tagsManager.generateRandomTag();
 			
+			// Check if we already have this tag in the cluster
+			const existingTag = this.tagsManager.tags.find(tag => 
+				tag.originalName === randomTag.text || 
+				tag.name === `$${randomTag.text}`
+			);
+			
+			if (existingTag) {
+				// Skip duplicate tags
+				return;
+			}
+			
 			// Add it to the cube - ensure it's visible by setting a minimum size
-			const size = Math.max(0.5, randomTag.size);
+			const size = Math.max(0.6, randomTag.size);
 			await this.tagsManager.addTag(randomTag.text, randomTag.url, size);
 			
 			// Limit the total number of tags to prevent overcrowding
-			if (this.tagsManager.tags.length > 40) {
-				// Remove the oldest tag
-				const oldestTag = this.tagsManager.tags[0];
-				this.tagsManager.tagManager.removeTag(oldestTag.id);
+			// Increase limit from 40 to 50 for a more impressive cluster
+			const maxTags = 50;
+			if (this.tagsManager.tags.length > maxTags) {
+				// Find and remove the oldest non-token tag (demo tag)
+				const oldestDemoTag = this.tagsManager.tags.find(tag => !tag.metadata?.isToken);
+				if (oldestDemoTag) {
+					this.tagsManager.tagManager.removeTag(oldestDemoTag.id);
+				} else {
+					// If all tags are real tokens, remove the oldest tag
+					const oldestTag = this.tagsManager.tags[0];
+					this.tagsManager.tagManager.removeTag(oldestTag.id);
+				}
 			}
-		}, 3000 + Math.random() * 3000);
+		}, 4000 + Math.random() * 3000);
 	}
 	
 	stopDemoMode() {

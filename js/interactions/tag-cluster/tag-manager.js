@@ -36,22 +36,22 @@ export class TagManager {
 		this.tags = [];
 		this.tagsByName = new Map();
 		
-		// Flight parameters
-		this.tagFlightDuration = 2.0; // seconds
+		// Flight parameters - reduced for tighter cluster formation
+		this.tagFlightDuration = 1.5; // seconds (reduced from 2.0)
 		
 		// Raycaster for interaction
 		this.raycaster = new THREE.Raycaster();
 		this.mouse = new THREE.Vector2();
 		
-		// Styling options
+		// Styling options - improved for isometric cluster look
 		this.tagStyle = {
 			font: null,            // Will be set later
 			size: 0.5,             // Base text size
-			height: 0.2,           // Text extrusion height
+			height: 0.25,          // Text extrusion height (increased from 0.2)
 			curveSegments: 4,      // Text curve detail
 			bevelEnabled: true,    // Enable bevel
-			bevelThickness: 0.03,  // Bevel thickness
-			bevelSize: 0.02,       // Bevel size
+			bevelThickness: 0.035, // Bevel thickness (increased from 0.03)
+			bevelSize: 0.025,      // Bevel size (increased from 0.02)
 			bevelOffset: 0,        // Bevel offset
 			bevelSegments: 3       // Bevel detail
 		};
@@ -137,18 +137,20 @@ export class TagManager {
 			bevelSegments: this.tagStyle.bevelSegments
 		});
 		
-		// Center geometry properly
+		// Center geometry properly for better cluster formation
 		textGeometry.computeBoundingBox();
 		const centerOffset = new THREE.Vector3();
 		textGeometry.boundingBox.getCenter(centerOffset);
 		textGeometry.translate(-centerOffset.x, -centerOffset.y, -centerOffset.z);
 		
-		// Create material
+		// Create material with improved settings for isometric look
 		const material = new THREE.MeshStandardMaterial({
 			color: options.color || this.getRandomColor(),
-			metalness: 0.8,
-			roughness: 0.2,
-			emissive: new THREE.Color(0x222222)
+			metalness: 0.7,  // Reduced from 0.8
+			roughness: 0.3,  // Increased from 0.2 for better light diffusion
+			emissive: new THREE.Color(0x222222),
+			emissiveIntensity: 0.2, // Added for subtle glow
+			flatShading: false  // Smooth shading for better isometric look
 		});
 		
 		// Create mesh
@@ -224,10 +226,11 @@ export class TagManager {
 	 * Generate a random appealing color
 	 */
 	getRandomColor() {
-		// Generate colors in a pleasing range
+		// Generate colors in a pleasing range for isometric structure
+		// More saturated, brighter colors for better visibility
 		const hue = Math.random() * 360;
-		const saturation = 0.7 + Math.random() * 0.3; // High saturation
-		const lightness = 0.5 + Math.random() * 0.2; // Moderate to bright
+		const saturation = 0.8 + Math.random() * 0.2; // Higher saturation (was 0.7-1.0)
+		const lightness = 0.6 + Math.random() * 0.2; // Brighter (was 0.5-0.7)
 		
 		// Convert HSL to hex
 		return new THREE.Color().setHSL(hue/360, saturation, lightness);

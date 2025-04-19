@@ -39,7 +39,8 @@ export class DexScreenerProcessor extends DataProcessor {
 			const data = await response.json();
 			
 			// Store profiles for later use
-			this.tokenProfiles = data.tokens || [];
+			// Check if the data is an array (direct token array) or has a tokens property
+			this.tokenProfiles = Array.isArray(data) ? data : data.tokens || [];
 			
 			return this.tokenProfiles;
 		} catch (error) {
