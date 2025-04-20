@@ -1,6 +1,13 @@
 /**
  * TagCluster - Integration layer between DexScreener token data and the tag system
  * Creates and manages tags based on token data with market cap-based sizing
+ * 
+ * Features:
+ * - Dynamic creation and removal of token tags with smooth animations
+ * - Market cap-based sizing of tags for visual importance
+ * - Fly-in animation for new tokens and fly-out animation for removed tokens
+ * - Balanced addition of tokens (60 on first update, then 2 per update)
+ * - Token data mapping with fallback strategies for incomplete data
  */
 
 import { TagManager } from '../tag-manager.js';
@@ -20,11 +27,11 @@ export class TagCluster {
 		
 		// Configuration
 		this.options = {
-			maxTags: 50,                     // Maximum number of tags to display
+			maxTags: 150,                     // Maximum number of tags to display
 			updateInterval: 10000,           // How often to update tokens (ms)
 			minTagSize: 0.5,                 // Minimum tag size
-			maxTagSize: 2.0,                 // Maximum tag size
-			initialTagCount: 5,              // Initial number of tags
+			maxTagSize: 5.0,                 // Maximum tag size
+			initialTagCount: 50,              // Initial number of tags
 			baseTokenUrl: 'https://dexscreener.com/ethereum/',
 			...options
 		};
@@ -40,40 +47,33 @@ export class TagCluster {
 		this.initialized = false;
 		this.lastUpdateTime = 0;
 		this.updateCallback = null;
+		this.firstUpdate = true; // Flag for first update to add 30 tags
 	}
 	
 	/**
-	 * Initialize the tag cluster with initial data
-	 * @param {Array} initialTokens - Initial token data
+	 * Initialize the tag cluster without initial data
 	 */
-	initialize(initialTokens = []) {
+	initialize() {
 		if (!this.tagManager.fontLoaded) {
 			// Wait for font to load before initializing
-			setTimeout(() => this.initialize(initialTokens), 100);
+			setTimeout(() => this.initialize(), 100);
 			return;
 		}
-		
-		// Store initial tokens
-		this.tokens = [...initialTokens];
-		
-		// Add initial tags if we have tokens
-		if (this.tokens.length > 0) {
-			// Add up to initialTagCount tags
-			const tagsToAdd = Math.min(this.options.initialTagCount, this.tokens.length);
-			
-			for (let i = 0; i < tagsToAdd; i++) {
-				this.addTokenTag(this.tokens[i]);
-			}
-		}
-		
-		// Mark as initialized
+
+		// Mark as initialized without adding any initial tags
 		this.initialized = true;
-		console.log('Tag cluster initialized with', this.tokenTags.size, 'tokens');
+		this.firstUpdate = true; // Flag for first update to add 30 tags
+		console.log('Tag cluster initialized, ready to add tokens dynamically');
 	}
 	
 	/**
 	 * Update the tag cluster with new token data
 	 * @param {Array} newTokens - New token data from DexScreener
+	 * This method:
+	 * 1. Maps existing tokens to efficiently identify changes
+	 * 2. Adds up to 60 new tokens on first update, then 2 per update
+	 * 3. Updates existing token properties (size, etc.)
+	 * 4. Animates removal of tokens no longer in the dataset with a fly-out effect
 	 */
 	updateTokens(newTokens) {
 		if (!this.initialized || !newTokens) return;
@@ -89,44 +89,77 @@ export class TagCluster {
 		// Store the last update time
 		this.lastUpdateTime = now;
 		
+		// Create map of existing tokens by key for faster lookup
+		const existingTokensMap = new Map();
+		Array.from(this.tokenTags.keys()).forEach(key => {
+			existingTokensMap.set(key, true);
+		});
+		
+		// Create map of new tokens by key
+		const newTokensMap = new Map();
+		newTokens.forEach(token => {
+			const key = this.getTokenKey(token);
+			if (key) {
+				newTokensMap.set(key, token);
+			}
+		});
+		
 		// Store the new tokens
 		this.tokens = [...newTokens];
 		
-		// Track tokens to add and remove
-		const existingTokenAddresses = Array.from(this.tokenTags.keys());
-		const newTokenAddresses = this.tokens.map(t => `${t.chainId}-${t.tokenAddress}`);
-		
 		// Find tokens to remove (no longer in the list)
-		const tokensToRemove = existingTokenAddresses.filter(
-			addr => !newTokenAddresses.includes(addr)
-		);
-		
-		// Find tokens to add (new tokens, up to max tags)
-		const tokensToAdd = this.tokens.filter(t => {
-			const key = `${t.chainId}-${t.tokenAddress}`;
-			return !this.tokenTags.has(key);
+		const tokensToRemove = [];
+		existingTokensMap.forEach((_, key) => {
+			if (!newTokensMap.has(key)) {
+				tokensToRemove.push(key);
+			}
 		});
 		
-		// Remove old tokens
-		tokensToRemove.forEach(addr => this.removeTokenTag(addr));
+		// Find tokens to add (new tokens, ensuring no duplicates)
+		const tokensToAdd = [];
+		newTokensMap.forEach((token, key) => {
+			if (!existingTokensMap.has(key)) {
+				tokensToAdd.push(token);
+			}
+		});
 		
-		// Add new tokens (up to max tags)
+		// Add new tokens dynamically 
+		const tagsToAddLimit = this.firstUpdate ? Math.min(60, this.options.maxTags) : 2; // Add up to 60 on first update, then 2 per update
 		const tagsToAdd = Math.min(
 			tokensToAdd.length,
-			this.options.maxTags - this.tokenTags.size
+			this.options.maxTags - this.tokenTags.size,
+			tagsToAddLimit
 		);
 		
+		// Log the number of tokens to add for debugging
+		console.log(`Attempting to add ${tagsToAdd} new tokens out of ${tokensToAdd.length} available (firstUpdate: ${this.firstUpdate})`);
+		
+		// Add some new tokens
 		for (let i = 0; i < tagsToAdd; i++) {
-			this.addTokenTag(tokensToAdd[i]);
+			if (i < tokensToAdd.length) {
+				const addedTag = this.addTokenTag(tokensToAdd[i]);
+				if (addedTag) {
+					console.log(`Successfully added token ${i+1}/${tagsToAdd}: ${addedTag.originalName}`);
+				} else {
+					console.warn(`Failed to add token ${i+1}/${tagsToAdd}`);
+				}
+			}
 		}
 		
 		// Update existing token tags
-		this.tokens.forEach(token => {
-			const key = `${token.chainId}-${token.tokenAddress}`;
-			if (this.tokenTags.has(key)) {
+		newTokensMap.forEach((token, key) => {
+			if (existingTokensMap.has(key)) {
 				this.updateTokenTag(token);
 			}
 		});
+		
+		// Remove old tokens with animation
+		tokensToRemove.forEach(key => this.animateTokenRemoval(key));
+		
+		// Reset first update flag after adding initial batch
+		if (this.firstUpdate) {
+			this.firstUpdate = false;
+		}
 		
 		// If we have an update callback, call it
 		if (this.updateCallback) {
@@ -135,15 +168,12 @@ export class TagCluster {
 	}
 	
 	/**
-	 * Add a new tag for a token
-	 * @param {Object} token - Token data from DexScreener
-	 * @returns {Object|null} - The created tag or null
+	 * Get a consistent key for a token
+	 * @param {Object} token - Token data
+	 * @returns {string} - Unique key for the token
 	 */
-	addTokenTag(token) {
-		if (!token) {
-			console.warn("Attempted to add null token");
-			return null;
-		}
+	getTokenKey(token) {
+		if (!token) return null;
 		
 		// Extract chainId and tokenAddress, handling different data structures
 		let chainId = token.chainId;
@@ -176,7 +206,95 @@ export class TagCluster {
 		}
 		
 		// Generate key for this token
-		const tokenKey = `${chainId}-${tokenAddress}`;
+		return `${chainId}-${tokenAddress}`;
+	}
+	
+	/**
+	 * Animate token tag removal with fly-out effect
+	 * @param {string} tokenKey - Token key to remove
+	 */
+	animateTokenRemoval(tokenKey) {
+		// Get tag ID
+		const tagId = this.tokenTags.get(tokenKey);
+		if (!tagId) return;
+		
+		// Find the tag object
+		const tag = this.tagManager.tags.find(t => t.id === tagId);
+		if (!tag || !tag.mesh) return;
+		
+		// Create an animation to fly the tag away
+		const duration = 2000; // Animation duration in ms (increased for smoother effect)
+		const startTime = Date.now();
+		const startPosition = tag.mesh.position.clone();
+		
+		// Calculate direction away from center (for a more natural fly-out)
+		const direction = tag.mesh.position.clone().normalize();
+		const distance = tag.mesh.position.length() * 2; // Fly twice as far as current distance
+		const endPosition = direction.multiplyScalar(distance);
+		
+		// Store original rotation
+		const startRotation = tag.mesh.rotation.clone();
+		
+		// Create the animation function
+		const animateOut = () => {
+			const elapsed = Date.now() - startTime;
+			const progress = Math.min(elapsed / duration, 1);
+			
+			// Apply easing function
+			const easedProgress = this.easeOutCubic(progress);
+			
+			// Update position
+			if (tag.mesh) {
+				tag.mesh.position.lerpVectors(startPosition, endPosition, easedProgress);
+				
+				// Add some rotation for a more dynamic effect
+				tag.mesh.rotation.x = startRotation.x + easedProgress * Math.PI * 0.5;
+				tag.mesh.rotation.y = startRotation.y + easedProgress * Math.PI * 0.25;
+				
+				// Scale down as it flies away
+				const scale = 1 - easedProgress * 0.9;
+				tag.mesh.scale.set(scale, scale, scale);
+				
+				// Continue animation if not complete
+				if (progress < 1) {
+					requestAnimationFrame(animateOut);
+				} else {
+					// Animation complete, remove the tag
+					this.removeTokenTag(tokenKey);
+				}
+			} else {
+				// Mesh was removed, clean up
+				this.removeTokenTag(tokenKey);
+			}
+		};
+		
+		// Start the animation
+		animateOut();
+	}
+	
+	/**
+	 * Easing function for smooth animation
+	 * @param {number} t - Progress from 0 to 1
+	 * @returns {number} - Eased value
+	 */
+	easeOutCubic(t) {
+		return 1 - Math.pow(1 - t, 3);
+	}
+	
+	/**
+	 * Add a new tag for a token
+	 * @param {Object} token - Token data from DexScreener
+	 * @returns {Object|null} - The created tag or null
+	 */
+	addTokenTag(token) {
+		if (!token) {
+			console.warn("Attempted to add null token");
+			return null;
+		}
+		
+		// Generate key for this token
+		const tokenKey = this.getTokenKey(token);
+		if (!tokenKey) return null;
 		
 		// Skip if already added
 		if (this.tokenTags.has(tokenKey)) {
@@ -208,22 +326,27 @@ export class TagCluster {
 		console.log(`Creating tag for token: ${displaySymbol} with size ${size.toFixed(2)}`);
 		
 		// Create the tag
-		const tag = this.tagManager.createTag(displaySymbol, tokenUrl, {
-			scale: size,
-			size: 0.5,     // Base text size before scaling
-			depth: 0.65,   // Extrusion depth 
-			token: token   // Store reference to token data
-		});
-		
-		// If successful, store in our mapping
-		if (tag) {
-			this.tokenTags.set(tokenKey, tag.id);
-			console.log(`Added token tag: ${displaySymbol} with size ${size.toFixed(2)}`);
-		} else {
-			console.error(`Failed to create tag for token: ${displaySymbol}`);
+		try {
+			const tag = this.tagManager.createTag(displaySymbol, tokenUrl, {
+				scale: size,
+				size: 0.5,     // Base text size before scaling
+				depth: 0.65,   // Extrusion depth 
+				token: token   // Store reference to token data
+			});
+			
+			// If successful, store in our mapping
+			if (tag) {
+				this.tokenTags.set(tokenKey, tag.id);
+				console.log(`Added token tag: ${displaySymbol} with size ${size.toFixed(2)}`);
+			} else {
+				console.error(`Failed to create tag for token: ${displaySymbol}`);
+			}
+			
+			return tag;
+		} catch (error) {
+			console.error(`Error creating tag for token ${displaySymbol}:`, error);
+			return null;
 		}
-		
-		return tag;
 	}
 	
 	/**
@@ -236,38 +359,9 @@ export class TagCluster {
 			return false;
 		}
 		
-		// Extract chainId and tokenAddress, handling different data structures
-		let chainId = token.chainId;
-		let tokenAddress = token.tokenAddress;
-		
-		// Handle case where data is nested differently
-		if (!chainId && token.baseToken && token.baseToken.chainId) {
-			chainId = token.baseToken.chainId;
-		}
-		
-		if (!tokenAddress && token.baseToken && token.baseToken.address) {
-			tokenAddress = token.baseToken.address;
-		}
-		
-		// If we still don't have the required fields, try fallbacks
-		if (!chainId) chainId = 'eth'; // Default to Ethereum
-		
-		if (!tokenAddress) {
-			// Try to use other identifiers
-			if (token.pairAddress) {
-				tokenAddress = token.pairAddress;
-			} else if (token.baseToken?.symbol) {
-				tokenAddress = `symbol-${token.baseToken.symbol}`;
-			} else if (token.symbol) {
-				tokenAddress = `symbol-${token.symbol}`;
-			} else {
-				// Not enough info to identify the token
-				return false;
-			}
-		}
-		
 		// Generate key for this token
-		const tokenKey = `${chainId}-${tokenAddress}`;
+		const tokenKey = this.getTokenKey(token);
+		if (!tokenKey) return false;
 		
 		// Get existing tag ID
 		const tagId = this.tokenTags.get(tokenKey);

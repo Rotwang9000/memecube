@@ -22,10 +22,12 @@ export class TagManager {
 		
 		// Configuration
 		this.options = {
-			fontPath: '/fonts/helvetiker_bold.typeface.json',
+			fontPath: `/fonts/${['shmup.json', 'freshman.json', 'heysei.json'][Math.floor(Math.random() * 3)]}`,
 			hoverColor: 0xffcc00,
 			defaultColor: 0xaaaaaa,
 			colorVariance: 0.1,  // Reduced variance for more uniform appearance
+			showWireframe: true,  // Enable wireframe visualization by default
+			wireframeColor: 0xFFFFFF, // Black wireframe
 			...options
 		};
 		
@@ -34,7 +36,7 @@ export class TagManager {
 		this.tagsByName = new Map();
 		
 		// Create the physics engine
-		this.physics = new TagPhysics(scene);
+		this.physics = new TagPhysics(scene, { tagManager: this });
 		
 		// Font loading state
 		this.fontLoaded = false;
@@ -178,8 +180,8 @@ export class TagManager {
 		// Create material with physically based rendering
 		const material = new THREE.MeshStandardMaterial({
 			color: color,
-			metalness: 0.7,
-			roughness: 0.2,
+			metalness: 0.9,  // Increased metalness for Borg-like appearance
+			roughness: 0.1,   // Reduced roughness for a polished look
 		});
 		
 		// Create mesh
@@ -441,6 +443,22 @@ export class TagManager {
 	 */
 	getTagById(id) {
 		return this.tags.find(tag => tag.id === id) || null;
+	}
+	
+	/**
+	 * Toggle wireframe visibility for all tags
+	 * @param {boolean} visible - Whether wireframes should be visible
+	 */
+	toggleWireframes(visible) {
+		// Update option
+		this.options.showWireframe = visible;
+		
+		// Update existing tags
+		this.tags.forEach(tag => {
+			if (tag.mesh && tag.mesh.userData.wireframe) {
+				tag.mesh.userData.wireframe.visible = visible;
+			}
+		});
 	}
 	
 	/**

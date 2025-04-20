@@ -9,7 +9,7 @@ MemeIsometric Cluster is a Three.js-based web application where meme coin tags a
 ## Features
 
 - Interactive 3D space environment with dynamic lighting
-- Isometric cluster structure with strict right angles and minimal spacing
+- Isometric interlocking cluster structure with strict right angles and minimal spacing
 - Balanced tag distribution across all 6 cube faces
 - Tags only move up/down relative to themselves during collisions
 - No wireframe - the letters themselves ARE the Isometric Cluster

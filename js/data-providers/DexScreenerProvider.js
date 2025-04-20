@@ -12,19 +12,95 @@ export class DexScreenerProvider extends TokenDataProvider {
 		// DexScreener API endpoints
 		this.apiEndpointProfiles = 'https://api.dexscreener.com/token-profiles/latest/v1';
 		this.apiEndpointSearch = 'https://api.dexscreener.com/latest/dex/search';
-		this.apiEndpointPairs = 'https://api.dexscreener.com/token-pairs/v1';
-		this.apiEndpointTokens = 'https://api.dexscreener.com/tokens/v1';
+		this.apiEndpointPairs = 'https://api.dexscreener.com/latest/dex/pairs';
+		this.apiEndpointTokenPairs = 'https://api.dexscreener.com/token-pairs/v1';
 		
 		// Storage for tokens and profiles
 		this.tokenData = [];
 		this.tokenProfiles = [];
 		this.maxTokensToStore = 100;
 		
-		// Set faster refresh rate for token data
-		this.fetchInterval = 6000; // 6 seconds
+		// Initial load configuration
+		this.isFirstLoad = true;
+		this.refreshTokenCount = 2;      // Get 2 tokens on regular refresh
+		
+		// Set refresh rate for token data
+		this.fetchInterval = 15000; // 6 seconds
+		
+		// Token pair data cache
+		this.tokenPairCache = new Map();
+		this.cacheExpiryTime = 15 * 60 * 1000; // 15 minutes
 		
 		// Track which tokens have already had market data fetched
 		this.fetchedTokenAddresses = new Set();
+		
+		// Save timestamp of last cache save to localStorage
+		this.lastCacheSave = 0;
+		this.cacheSaveInterval = 60 * 1000; // 1 minute
+		
+		// Try to load cache from localStorage on initialization
+		this.loadCacheFromStorage();
+	}
+	
+	/**
+	 * Save the current cache to localStorage
+	 */
+	saveCacheToStorage() {
+		try {
+			const now = Date.now();
+			// Only save cache periodically to avoid excessive writes
+			if (now - this.lastCacheSave < this.cacheSaveInterval) {
+				return;
+			}
+			
+			// Convert the Map to an array of entries
+			const cacheEntries = Array.from(this.tokenPairCache.entries());
+			const cacheToSave = {
+				timestamp: now,
+				entries: cacheEntries
+			};
+			
+			localStorage.setItem('tokenPairCache', JSON.stringify(cacheToSave));
+			this.lastCacheSave = now;
+			console.log('DexScreenerProvider: Saved token pair cache to localStorage');
+		} catch (error) {
+			console.error('Error saving cache to localStorage:', error);
+		}
+	}
+	
+	/**
+	 * Load the cache from localStorage
+	 */
+	loadCacheFromStorage() {
+		try {
+			const cachedData = localStorage.getItem('tokenPairCache');
+			if (!cachedData) return;
+			
+			const parsedCache = JSON.parse(cachedData);
+			const now = Date.now();
+			
+			// Check if overall cache is expired (older than 24 hours)
+			if (now - parsedCache.timestamp > 24 * 60 * 60 * 1000) {
+				console.log('DexScreenerProvider: Cache in localStorage is older than 24 hours, discarding');
+				localStorage.removeItem('tokenPairCache');
+				return;
+			}
+			
+			// Reconstruct the Map from the array of entries
+			const cacheMap = new Map(parsedCache.entries);
+			
+			// Filter out expired entries
+			for (const [key, value] of cacheMap.entries()) {
+				if (now - value.timestamp > this.cacheExpiryTime) {
+					cacheMap.delete(key);
+				}
+			}
+			
+			this.tokenPairCache = cacheMap;
+			console.log(`DexScreenerProvider: Loaded ${cacheMap.size} token pair details from localStorage cache`);
+		} catch (error) {
+			console.error('Error loading cache from localStorage:', error);
+		}
 	}
 	
 	/**
@@ -51,6 +127,71 @@ export class DexScreenerProvider extends TokenDataProvider {
 	}
 	
 	/**
+	 * Check if a token pair is cached and not expired
+	 * @param {string} chainId The chain ID
+	 * @param {string} tokenAddress The token address
+	 * @returns {Object|null} The cached pair data or null if not cached or expired
+	 */
+	getCachedTokenPair(chainId, tokenAddress) {
+		const cacheKey = `${chainId}-${tokenAddress}`;
+		const cachedData = this.tokenPairCache.get(cacheKey);
+		
+		if (!cachedData) return null;
+		
+		// Check if cache has expired
+		const now = Date.now();
+		if (now - cachedData.timestamp > this.cacheExpiryTime) {
+			// Expired cache entry, remove it
+			this.tokenPairCache.delete(cacheKey);
+			return null;
+		}
+		
+		return cachedData.data;
+	}
+	
+	/**
+	 * Add token pair data to cache
+	 * @param {string} chainId The chain ID
+	 * @param {string} tokenAddress The token address
+	 * @param {Object} pairData The pair data to cache
+	 */
+	cacheTokenPair(chainId, tokenAddress, pairData) {
+		const cacheKey = `${chainId}-${tokenAddress}`;
+		this.tokenPairCache.set(cacheKey, {
+			data: pairData,
+			timestamp: Date.now()
+		});
+		
+		// Schedule a cache save
+		setTimeout(() => this.saveCacheToStorage(), 100);
+	}
+	
+	/**
+	 * Fetch token pair data directly using the pairs endpoint
+	 * @param {string} chainId The chain ID
+	 * @param {string} pairAddress The pair address
+	 * @returns {Promise<Object|null>} The pair data or null if not found
+	 */
+	async fetchPairData(chainId, pairAddress) {
+		try {
+			const response = await fetch(`${this.apiEndpointPairs}/${chainId}/${pairAddress}`);
+			if (!response.ok) {
+				throw new Error(`HTTP error! status: ${response.status}`);
+			}
+			
+			const data = await response.json();
+			if (data.pairs && data.pairs.length > 0) {
+				return data.pairs[0];
+			}
+			
+			return null;
+		} catch (error) {
+			console.error(`Error fetching pair data for ${chainId}/${pairAddress}:`, error);
+			return null;
+		}
+	}
+	
+	/**
 	 * Fetch market data for specific tokens
 	 * @param {Array} tokens Array of tokens to fetch market data for
 	 * @returns {Promise<Array>} Array of tokens with market data
@@ -61,6 +202,8 @@ export class DexScreenerProvider extends TokenDataProvider {
 		}
 		
 		try {
+			console.log(`DexScreenerProvider: Fetching market data for ${tokens.length} tokens`);
+			
 			// Create array of promises for each token's market data
 			const promises = tokens.map(async (token) => {
 				// Skip if token doesn't have required data
@@ -68,29 +211,38 @@ export class DexScreenerProvider extends TokenDataProvider {
 					return null;
 				}
 				
-				// Check if we already have this token in our data
-				const tokenKey = `${token.chainId}-${token.tokenAddress}`;
-				this.fetchedTokenAddresses.add(tokenKey);
+				// Check if we already have this token in our cache
+				const cachedPair = this.getCachedTokenPair(token.chainId, token.tokenAddress);
+				if (cachedPair) {
+					// Use cached data but mark as fetched
+					this.fetchedTokenAddresses.add(`${token.chainId}-${token.tokenAddress}`);
+					return { ...token, ...cachedPair };
+				}
 				
-				// Construct query for this token
-				const query = `${token.chainId}:${token.tokenAddress}`;
+				// Mark token as fetched
+				this.fetchedTokenAddresses.add(`${token.chainId}-${token.tokenAddress}`);
 				
-				// Fetch market data for this token
-				const response = await fetch(`${this.apiEndpointSearch}?q=${encodeURIComponent(query)}`);
+				// Use token-pairs endpoint to get all pairs for this token
+				const url = `${this.apiEndpointTokenPairs}/${token.chainId}/${token.tokenAddress}`;
+				
+				const response = await fetch(url);
 				if (!response.ok) {
 					throw new Error(`HTTP error! status: ${response.status}`);
 				}
 				
 				const data = await response.json();
 				
-				// If we got pairs data, add the top pair to our token data
-				if (data.pairs && data.pairs.length > 0) {
+				// If we got pairs data (should be an array of pairs)
+				if (Array.isArray(data) && data.length > 0) {
 					// Find the top pair by liquidity
-					const topPair = data.pairs.reduce((best, current) => {
+					const topPair = data.reduce((best, current) => {
 						const bestLiquidity = parseFloat(best.liquidity?.usd || 0);
 						const currentLiquidity = parseFloat(current.liquidity?.usd || 0);
 						return currentLiquidity > bestLiquidity ? current : best;
-					}, data.pairs[0]);
+					}, data[0]);
+					
+					// Cache this pair for later use
+					this.cacheTokenPair(token.chainId, token.tokenAddress, topPair);
 					
 					// Merge the pair data with our token data (preserving token profile info)
 					return { 
@@ -121,31 +273,50 @@ export class DexScreenerProvider extends TokenDataProvider {
 	selectTokensForMarketDataUpdate(profiles) {
 		const tokensToUpdate = [];
 		
-		// 1. Filter for new tokens we haven't fetched market data for yet
-		for (const token of profiles) {
-			if (!token.chainId || !token.tokenAddress) continue;
+		// If this is the first load, we want to fetch data for all available tokens
+		if (this.isFirstLoad) {
+			console.log(`DexScreenerProvider: First load, selecting all available tokens`);
 			
-			const tokenKey = `${token.chainId}-${token.tokenAddress}`;
-			if (!this.fetchedTokenAddresses.has(tokenKey)) {
-				tokensToUpdate.push(token);
-				this.fetchedTokenAddresses.add(tokenKey);
-			}
-		}
-		
-		// 2. Add a few random tokens from our existing collection for refresh
-		// Choose 2 random tokens from existing data to update
-		if (this.tokenData.length > 0) {
-			const randomCount = Math.min(2, this.tokenData.length);
-			const indexes = new Set();
-			
-			// Get random indexes to update
-			while (indexes.size < randomCount) {
-				indexes.add(Math.floor(Math.random() * this.tokenData.length));
+			// Take all new tokens for first load
+			for (const token of profiles) {
+				if (token.chainId && token.tokenAddress) {
+					tokensToUpdate.push(token);
+					// Mark as fetched
+					this.fetchedTokenAddresses.add(`${token.chainId}-${token.tokenAddress}`);
+				}
 			}
 			
-			// Add randomly selected tokens to update list
-			for (const index of indexes) {
-				tokensToUpdate.push(this.tokenData[index]);
+			this.isFirstLoad = false;
+		} else {
+			// Not first load - update a few tokens
+			console.log(`DexScreenerProvider: Regular refresh, selecting ${this.refreshTokenCount} existing tokens plus new ones`);
+			
+			// 1. Process new tokens we haven't seen before
+			for (const token of profiles) {
+				if (!token.chainId || !token.tokenAddress) continue;
+				
+				const tokenKey = `${token.chainId}-${token.tokenAddress}`;
+				if (!this.fetchedTokenAddresses.has(tokenKey)) {
+					tokensToUpdate.push(token);
+					this.fetchedTokenAddresses.add(tokenKey);
+					console.log(`Added new token for update: ${tokenKey}`);
+				}
+			}
+			
+			// 2. Add a few random tokens from our existing collection for refresh
+			if (this.tokenData.length > 0) {
+				const randomCount = Math.min(this.refreshTokenCount, this.tokenData.length);
+				const indexes = new Set();
+				
+				// Get random indexes to update
+				while (indexes.size < randomCount) {
+					indexes.add(Math.floor(Math.random() * this.tokenData.length));
+				}
+				
+				// Add randomly selected tokens to update list
+				for (const index of indexes) {
+					tokensToUpdate.push(this.tokenData[index]);
+				}
 			}
 		}
 		
@@ -211,14 +382,11 @@ export class DexScreenerProvider extends TokenDataProvider {
 			
 			this.lastFetchTime = Date.now();
 			
-			// Notify callbacks with updated data
-			console.log(`DexScreenerProvider: Notifying callbacks with ${this.tokenData.length} tokens`);
-			this.notifyCallbacks(this.tokenData);
+			// Save cache periodically
+			this.saveCacheToStorage();
 			
-			// Output some sample token data for debugging
-			if (this.tokenData.length > 0) {
-				console.log("DexScreenerProvider: Sample token data:", this.tokenData[0]);
-			}
+			// Notify callbacks with updated data
+			this.notifyCallbacks(this.tokenData);
 			
 			return this.tokenData;
 		} catch (error) {
@@ -273,13 +441,13 @@ export class DexScreenerProvider extends TokenDataProvider {
 	 * @returns {Promise<Array>} Array of price history points
 	 */
 	async getTokenPriceHistory(token) {
-		if (!token || !token.dexId || !token.pairAddress) {
+		if (!token || !token.chainId || !token.pairAddress) {
 			return null;
 		}
 		
 		try {
-			// Construct API URL
-			const url = `https://api.dexscreener.com/latest/dex/pairs/${token.dexId}/${token.pairAddress}/candles?from=0&to=${Date.now()}&resolution=1h`;
+			// Construct API URL - Note: Correct endpoint for candles
+			const url = `${this.apiEndpointPairs}/${token.chainId}/${token.pairAddress}/candles`;
 			
 			const response = await fetch(url);
 			if (!response.ok) {
