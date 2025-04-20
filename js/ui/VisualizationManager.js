@@ -1,28 +1,26 @@
 /**
- * DexScreener UI Manager
- * Handles UI and visualization for DexScreener data
+ * Visualization Manager
+ * Manages 3D visualizations and UI for token data
+ * Provider-agnostic - works with any TokenDataProvider
  */
 
 import { TokenScoreboard } from '../visualizations/token-scoreboard.js';
 import { TokenChart3D } from '../visualizations/token-chart-3d.js';
 import { TagCluster } from '../interactions/tag-cluster/tag-cluster.js';
 import { Utils } from '../utils/utils.js';
-import { DexScreenerProcessor } from '../data-processors/DexScreenerProcessor.js';
 
-export class DexScreenerManager {
-	constructor(scene = null, camera = null, tagsManager = null) {
+export class VisualizationManager {
+	constructor(scene = null, camera = null, tagsManager = null, dataProvider = null) {
 		this.scene = scene;
 		this.camera = camera;
 		this.tagsManager = tagsManager;
+		this.dataProvider = dataProvider;
 		this.isModalOpen = false;
 		this.modalElement = null;
 		this.showVisualizations = true;
 		this.utils = new Utils();
 		this.lastCameraMoving = false;
 		this.lastCameraMovingTimestamp = null;
-		
-		// Initialize the data processor
-		this.dataProcessor = new DexScreenerProcessor();
 		
 		// Setup 3D visualizations if scene is provided
 		if (this.scene && this.camera && this.tagsManager) {
@@ -32,11 +30,11 @@ export class DexScreenerManager {
 		// Create UI elements
 		this.createTokenListUI();
 		
-		// Register for data updates
-		this.dataProcessor.registerProcessingCallback(this.onDataUpdate.bind(this));
-		
-		// Start auto-refresh
-		this.dataProcessor.startAutoRefresh(6000); // 6 seconds refresh
+		// Register for data updates if we have a provider
+		if (this.dataProvider) {
+			this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
+			this.dataProvider.startAutoRefresh();
+		}
 	}
 	
 	/**
@@ -49,8 +47,8 @@ export class DexScreenerManager {
 		// Create token chart
 		this.tokenChart = new TokenChart3D(this.scene, this.camera);
 		
-		// Create tag cluster visualization (replaces token cube)
-		this.tokenCube = new TagCluster(this.scene, this.camera, this.tagsManager);
+		// Create tag cluster visualization
+		this.tokenCluster = new TagCluster(this.scene, this.camera, this.tagsManager);
 		
 		// Create UI toggle button for visualizations
 		this.createVisualizationToggle();
@@ -61,7 +59,6 @@ export class DexScreenerManager {
 		// Force update the visualizations to ensure they're properly positioned
 		if (this.tokenScoreboard) {
 			this.tokenScoreboard.isVisible = true;
-			console.log("Setting token scoreboard to visible");
 			this.tokenScoreboard.updateScreenPosition();
 		}
 		
@@ -70,15 +67,45 @@ export class DexScreenerManager {
 			this.tokenChart.updateScreenPosition();
 		}
 		
-		// Don't try to access cubeGroup directly as it doesn't exist in TagCluster
-		// Instead, initialize the tag cluster if needed
-		if (this.tokenCube) {
-			// The token cluster manages its own visibility through its tag manager
-			this.tokenCube.initialize([]);
+		// Initialize the tag cluster with empty data first
+		if (this.tokenCluster) {
+			this.tokenCluster.initialize([]);
 		}
 		
 		// Generate sample data for visualizations
 		this.initializeDefaultData();
+		
+		// Set up update events for when the data provider gets new data
+		if (this.dataProvider) {
+			this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
+			
+			// If we already have token data, update the cluster now
+			const existingData = this.dataProvider.getAllTokenData();
+			if (existingData && existingData.length > 0) {
+				console.log("Using existing data to initialize visualizations:", existingData.length, "tokens");
+				this.tokenCluster.updateTokens(existingData);
+			}
+		}
+	}
+	
+	/**
+	 * Set the data provider (can be changed at runtime)
+	 * @param {TokenDataProvider} dataProvider The data provider to use
+	 */
+	setDataProvider(dataProvider) {
+		// Unregister from old provider if exists
+		if (this.dataProvider) {
+			this.dataProvider.unregisterUpdateCallback(this.onDataUpdate.bind(this));
+		}
+		
+		// Set new provider
+		this.dataProvider = dataProvider;
+		
+		// Register with new provider
+		if (this.dataProvider) {
+			this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
+			this.dataProvider.startAutoRefresh();
+		}
 	}
 	
 	/**
@@ -86,9 +113,17 @@ export class DexScreenerManager {
 	 * @param {Array} data Updated token data
 	 */
 	onDataUpdate(data) {
-		// Update token cube with all token data
-		if (this.tokenCube && data.length > 0) {
-			this.tokenCube.updateTokens(data);
+		if (!data || data.length === 0) {
+			console.warn("Received empty data update");
+			return;
+		}
+		
+		console.log(`Received data update with ${data.length} tokens`);
+		
+		// Update token cluster with all token data
+		if (this.tokenCluster && data.length > 0) {
+			console.log("Updating token cluster with", data.length, "tokens");
+			this.tokenCluster.updateTokens(data);
 		}
 		
 		// Update scoreboard with top tokens
@@ -168,26 +203,26 @@ export class DexScreenerManager {
 		
 		document.body.appendChild(demoButton);
 		
-		// Add token cube toggle button
-		const cubeButton = document.createElement('button');
-		cubeButton.textContent = '🔄 Token Cube';
-		cubeButton.style.position = 'absolute';
-		cubeButton.style.bottom = '220px';
-		cubeButton.style.right = '20px';
-		cubeButton.style.zIndex = '1000';
+		// Add token refresh button
+		const refreshButton = document.createElement('button');
+		refreshButton.textContent = '🔄 Refresh Tokens';
+		refreshButton.style.position = 'absolute';
+		refreshButton.style.bottom = '220px';
+		refreshButton.style.right = '20px';
+		refreshButton.style.zIndex = '1000';
 		
-		cubeButton.onclick = async () => {
-			// Refresh token data and update cube
-			if (this.dataProcessor) {
-				const tokenData = await this.dataProcessor.refreshAllTokenData();
-				if (this.tokenCube && tokenData.length > 0) {
-					this.tokenCube.updateTokens(tokenData);
-					this.utils.showTemporaryMessage(`Updated token cube with ${tokenData.length} tokens!`);
+		refreshButton.onclick = async () => {
+			// Refresh token data and update visualizations
+			if (this.dataProvider) {
+				const tokenData = await this.dataProvider.refreshData();
+				if (this.tokenCluster && tokenData.length > 0) {
+					this.tokenCluster.updateTokens(tokenData);
+					this.utils.showTemporaryMessage(`Updated visualizations with ${tokenData.length} tokens!`);
 				}
 			}
 		};
 		
-		document.body.appendChild(cubeButton);
+		document.body.appendChild(refreshButton);
 	}
 	
 	/**
@@ -204,11 +239,9 @@ export class DexScreenerManager {
 			this.tokenChart.toggleVisibility();
 		}
 		
-		// TagCluster doesn't have a direct visibility toggle, 
-		// so we don't try to access the non-existent cubeGroup
-		if (this.tokenCube && this.tokenCube.tagManager) {
-			// Update tags visibility through the tag manager instead
-			this.tokenCube.tagManager.tags.forEach(tag => {
+		// Update tag cluster visibility through tag manager
+		if (this.tokenCluster && this.tokenCluster.tagManager) {
+			this.tokenCluster.tagManager.tags.forEach(tag => {
 				if (tag.mesh) {
 					tag.mesh.visible = this.showVisualizations;
 				}
@@ -292,7 +325,9 @@ export class DexScreenerManager {
 			refreshButton.disabled = true;
 			refreshButton.textContent = '⏳ Refreshing...';
 			
-			await this.dataProcessor.refreshAllTokenData();
+			if (this.dataProvider) {
+				await this.dataProvider.refreshData();
+			}
 			
 			refreshButton.disabled = false;
 			refreshButton.textContent = '🔄 Refresh Data';
@@ -320,9 +355,9 @@ export class DexScreenerManager {
 		this.modalElement.style.display = 'block';
 		this.isModalOpen = true;
 		
-		// If we don't have any data yet, fetch it
-		if (this.dataProcessor.data.length === 0) {
-			await this.dataProcessor.refreshAllTokenData();
+		// If we have a data provider but no data yet, fetch it
+		if (this.dataProvider && this.dataProvider.getAllTokenData().length === 0) {
+			await this.dataProvider.refreshData();
 		}
 		
 		// Update token list content
@@ -341,8 +376,8 @@ export class DexScreenerManager {
 		// Clear existing content
 		container.innerHTML = '';
 		
-		// Get token data
-		const tokens = this.dataProcessor.getAllData();
+		// Get token data if we have a provider
+		const tokens = this.dataProvider ? this.dataProvider.getAllTokenData() : [];
 		
 		if (tokens.length === 0) {
 			container.innerHTML = '<p>No token data available. Click refresh to fetch data.</p>';
@@ -431,8 +466,12 @@ export class DexScreenerManager {
 			const mcapCell = document.createElement('td');
 			mcapCell.style.padding = '8px';
 			
-			const mcap = parseFloat(token.marketCap || 0);
-			mcapCell.textContent = mcap ? this.dataProcessor.formatMarketCap(mcap) : 'N/A';
+			if (this.dataProvider && typeof this.dataProvider.formatMarketCap === 'function') {
+				const mcap = parseFloat(token.marketCap || 0);
+				mcapCell.textContent = mcap ? this.dataProvider.formatMarketCap(mcap) : 'N/A';
+			} else {
+				mcapCell.textContent = 'N/A';
+			}
 			
 			// Actions cell
 			const actionsCell = document.createElement('td');
@@ -468,7 +507,9 @@ export class DexScreenerManager {
 			cubeButton.addEventListener('click', () => {
 				const symbol = token.baseToken?.symbol || 'TOKEN';
 				const url = token.url || '#';
-				const size = this.dataProcessor.calculateTokenSize(token);
+				const size = this.dataProvider ? 
+					this.dataProvider.calculateTokenSize(token) : 
+					0.7; // Default size if no provider
 				
 				// Dispatch event to add token to cube
 				document.dispatchEvent(new CustomEvent('add-token-to-cube', {
@@ -517,10 +558,10 @@ export class DexScreenerManager {
 	 * @param {Object} token Token to show chart for
 	 */
 	async fetchAndUpdateTokenChart(token) {
-		if (!this.tokenChart) return;
+		if (!this.tokenChart || !this.dataProvider) return;
 		
-		// Get price history for token
-		const priceHistory = await this.dataProcessor.fetchTokenPriceHistory(token);
+		// Get price history for token from data provider
+		const priceHistory = await this.dataProvider.getTokenPriceHistory(token);
 		
 		// Update chart with token data
 		if (priceHistory && priceHistory.length > 0) {
@@ -544,7 +585,6 @@ export class DexScreenerManager {
 		if (this.tokenScoreboard) {
 			// Only call updateScreenPosition when camera movement starts or stops
 			if (isCameraMoving !== this.lastCameraMoving || (isCameraMoving && this.lastCameraMovingTimestamp && (Date.now() - this.lastCameraMovingTimestamp) > 5000)) {
-				console.log("Camera movement state changed:", isCameraMoving ? "moving" : "stopped", this.lastCameraMovingTimestamp, Date.now());
 				this.lastCameraMovingTimestamp = Date.now();
 				this.tokenScoreboard.updateScreenPosition();
 			}
@@ -560,9 +600,9 @@ export class DexScreenerManager {
 			this.tokenChart.update(deltaTime);
 		}
 		
-		// Update token cube
-		if (this.tokenCube) {
-			this.tokenCube.update(deltaTime);
+		// Update token cluster
+		if (this.tokenCluster) {
+			this.tokenCluster.update(deltaTime);
 		}
 		
 		// Store camera movement state for next comparison
@@ -584,15 +624,12 @@ export class DexScreenerManager {
 			this.tokenChart.handleInteraction(raycaster);
 		}
 		
-		// Check interaction with token cube - don't access cubeGroup
-		if (this.tokenCube && this.tokenCube.tagManager) {
-			// No need to check cubeGroup.visible - check if we should interact with tags
-			if (this.showVisualizations) {
-				// The TagCluster class doesn't have a handleInteraction method,
-				// but its tagManager might
-				if (typeof this.tokenCube.tagManager.handleInteraction === 'function') {
-					this.tokenCube.tagManager.handleInteraction(raycaster);
-				}
+		// Check interaction with token cluster
+		if (this.tokenCluster && this.tokenCluster.tagManager && this.showVisualizations) {
+			// The TokenCluster doesn't have a handleInteraction method directly
+			// But its tagManager might
+			if (typeof this.tokenCluster.tagManager.handleInteraction === 'function') {
+				this.tokenCluster.tagManager.handleInteraction(raycaster);
 			}
 		}
 	}
@@ -617,7 +654,11 @@ export class DexScreenerManager {
 		};
 		
 		// Update the token chart with sample data or real data if available
-		const priceHistory = await this.dataProcessor.fetchTokenPriceHistory(demoToken);
+		let priceHistory = null;
+		
+		if (this.dataProvider) {
+			priceHistory = await this.dataProvider.getTokenPriceHistory(demoToken);
+		}
 		
 		if (priceHistory && priceHistory.length > 0) {
 			this.tokenChart.updateChartData(priceHistory, demoToken.baseToken.symbol);
@@ -658,8 +699,8 @@ export class DexScreenerManager {
 			this.tokenScoreboard.updateTokenData(demoTokens);
 		}
 		
-		// Update token cube with demo token
-		if (this.tokenCube) {
+		// Update token cluster with demo token
+		if (this.tokenCluster) {
 			// Dispatch event to add token to cube
 			document.dispatchEvent(new CustomEvent('add-token-to-cube', {
 				detail: { 

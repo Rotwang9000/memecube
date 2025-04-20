@@ -3,7 +3,8 @@ import { Scene } from './core/scene.js';
 import { TagsManager } from './interactions/tag-cluster/tags.js';
 import { initControls } from './core/controls.js';
 import { Utils } from './utils/utils.js';
-import { DexScreenerManager } from './ui/DexScreenerManager.js';
+import { VisualizationManager } from './ui/VisualizationManager.js';
+import { DexScreenerProvider } from './data-providers/DexScreenerProvider.js';
 
 class MemeCube {
 	constructor() {
@@ -12,7 +13,8 @@ class MemeCube {
 		this.tagsManager = null;
 		this.controls = null;
 		this.utils = new Utils();
-		this.dexScreenerManager = null;
+		this.visualizationManager = null;
+		this.dataProvider = null;
 		this.demoMode = false;
 		this.demoInterval = null;
 		this.clock = new THREE.Clock();
@@ -22,7 +24,7 @@ class MemeCube {
 		this.lastCameraPosition = null;
 		this.lastCameraQuaternion = null;
 		
-		// We'll use DexScreener data instead of hardcoded tags
+		// We'll use token data instead of hardcoded tags
 		this.initialTokens = [];
 		this.maxInitialTokens = 15; // Limit to 15 initial tokens
 		
@@ -39,13 +41,16 @@ class MemeCube {
 		// Initialize controls
 		this.controls = initControls(this.scene.camera, this.canvas);
 		
-		// Initialize DexScreener module first to get token data
-		await this.initDexScreener();
+		// Create the data provider
+		this.dataProvider = new DexScreenerProvider();
 		
-		// Add initial tags from DexScreener data
-		await this.addInitialTokensFromDexScreener();
+		// Initialize visualization module first to get token data
+		await this.initVisualizations();
 		
-		// If we couldn't get DexScreener data and have no tags, add some fallback tags
+		// Add initial tags from token data
+		await this.addInitialTokensFromProvider();
+		
+		// If we couldn't get token data and have no tags, add some fallback tags
 		if (this.tagsManager.tags.length === 0) {
 			console.log("No tags added yet - adding fallback tags");
 			
@@ -64,7 +69,7 @@ class MemeCube {
 		}
 		
 		// Initialize tag age system to enable shrinking and inward movement
-		this.tagsManager.initializeTagAgeSystem();
+		// this.tagsManager.initializeTagAgeSystem();
 		
 		// Set up form submission
 		this.setupFormSubmission();
@@ -75,8 +80,10 @@ class MemeCube {
 		// Add information button
 		this.setupInfoButton();
 		
-		// Start demo mode if enabled or if we have very few tags
-		if (this.demoMode || this.tagsManager.tags.length < 5) {
+		// Start demo mode ONLY if explicitly enabled via demoMode flag
+		// Do not auto-start based on tag count
+		if (this.demoMode) {
+			console.log("Demo mode explicitly enabled, starting demo");
 			this.startDemoMode();
 		}
 		
@@ -87,33 +94,35 @@ class MemeCube {
 		this.animate();
 	}
 	
-	// Initialize DexScreener integration
-	async initDexScreener() {
-		// Initialize DexScreener with scene, camera, and tagsManager references
-		this.dexScreenerManager = new DexScreenerManager(this.scene.scene, this.scene.camera, this.tagsManager);
-		
-		// Create UI elements
-		this.dexScreenerManager.createTokenListUI();
+	// Initialize visualizations
+	async initVisualizations() {
+		// Initialize visualization manager with scene, camera, and tagsManager references
+		this.visualizationManager = new VisualizationManager(
+			this.scene.scene, 
+			this.scene.camera, 
+			this.tagsManager,
+			this.dataProvider
+		);
 		
 		// Fetch initial token data
-		if (this.dexScreenerManager.dataProcessor) {
-			await this.dexScreenerManager.dataProcessor.refreshAllTokenData();
+		if (this.dataProvider) {
+			await this.dataProvider.refreshData();
 		}
 		
 		// Ensure visualizations are visible
-		if (this.dexScreenerManager.tokenScoreboard) {
-			this.dexScreenerManager.tokenScoreboard.isVisible = true;
+		if (this.visualizationManager.tokenScoreboard) {
+			this.visualizationManager.tokenScoreboard.isVisible = true;
 			console.log("Initializing token scoreboard");
-			this.dexScreenerManager.tokenScoreboard.updateScreenPosition();
+			this.visualizationManager.tokenScoreboard.updateScreenPosition();
 		}
 		
-		if (this.dexScreenerManager.tokenChart) {
-			this.dexScreenerManager.tokenChart.isVisible = true;
-			this.dexScreenerManager.tokenChart.updateScreenPosition();
+		if (this.visualizationManager.tokenChart) {
+			this.visualizationManager.tokenChart.isVisible = true;
+			this.visualizationManager.tokenChart.updateScreenPosition();
 		}
 		
-		if (this.dexScreenerManager.tokenCube) {
-			this.dexScreenerManager.tokenCube.cubeGroup.visible = true;
+		if (this.visualizationManager.tokenCluster) {
+			this.visualizationManager.tokenCluster.initialize([]);
 		}
 		
 		// Set up event listener for adding tokens to cube
@@ -131,46 +140,74 @@ class MemeCube {
 	}
 	
 	/**
-	 * Add initial tokens from DexScreener data
+	 * Add initial tokens from data provider
 	 */
-	async addInitialTokensFromDexScreener() {
-		// Check if we have token data from DexScreener
-		if (!this.dexScreenerManager || !this.dexScreenerManager.dataProcessor) {
-			console.warn("DexScreener data not available for initial tags");
+	async addInitialTokensFromProvider() {
+		// Check if we have a data provider
+		if (!this.dataProvider) {
+			console.warn("Data provider not available for initial tags");
 			return;
 		}
 		
 		try {
 			// Get token data or refresh if needed
-			let tokenData = this.dexScreenerManager.dataProcessor.data;
+			let tokenData = this.dataProvider.getAllTokenData();
 			
 			// If no data available yet, refresh
 			if (!tokenData || tokenData.length === 0) {
-				tokenData = await this.dexScreenerManager.dataProcessor.refreshAllTokenData();
+				tokenData = await this.dataProvider.refreshData();
 			}
 			
-			// Still no data? Use demo mode
+			// Still no data? Log a warning but don't auto-start demo mode
 			if (!tokenData || tokenData.length === 0) {
-				console.warn("No token data available, using demo mode");
-				this.startDemoMode();
+				console.warn("No token data available");
+				this.utils.showTemporaryMessage('No token data available - consider using demo mode');
 				return;
 			}
+			
+			console.log("Token data loaded:", tokenData.length, "tokens");
 			
 			// Limit number of initial tokens
 			const tokensToAdd = tokenData.slice(0, this.maxInitialTokens);
 			
 			// Add each token with small delay for better physics
 			for (const token of tokensToAdd) {
-				if (!token.baseToken?.symbol) continue;
+				// Check for different token data structures and handle them appropriately
+				let symbol;
 				
-				const symbol = token.baseToken.symbol;
-				const url = token.url || `https://dexscreener.com/${token.chainId || 'eth'}/${token.pairAddress || ''}`;
-				
-				// Calculate size based on market cap
-				let size = 0.7; // Default size
-				if (token.marketCap && this.dexScreenerManager.calculateTokenSize) {
-					size = this.dexScreenerManager.calculateTokenSize(token);
+				// Try to get the symbol from different possible locations in the token data
+				if (token.baseToken?.symbol) {
+					symbol = token.baseToken.symbol;
+				} else if (token.symbol) {
+					symbol = token.symbol;
+				} else if (token.name) {
+					// Fallback to name if symbol not present
+					symbol = token.name;
+				} else {
+					// Skip tokens without symbol or name
+					console.warn("Skipping token without symbol:", token);
+					continue;
 				}
+				
+				// Generate URL from different possible data structures
+				let url;
+				if (token.url) {
+					url = token.url;
+				} else if (token.pairAddress) {
+					url = `https://dexscreener.com/${token.chainId || 'eth'}/${token.pairAddress}`;
+				} else if (token.tokenAddress) {
+					url = `https://dexscreener.com/${token.chainId || 'eth'}/${token.tokenAddress}`;
+				} else {
+					url = 'https://dexscreener.com/';
+				}
+				
+				// Calculate size based on market cap or other metrics
+				let size = 0.7; // Default size
+				if (this.dataProvider.calculateTokenSize) {
+					size = this.dataProvider.calculateTokenSize(token);
+				}
+				
+				console.log(`Adding token tag: ${symbol} with size ${size.toFixed(2)}`);
 				
 				// Add tag
 				await this.tagsManager.addTag(symbol, url, size);
@@ -182,10 +219,11 @@ class MemeCube {
 			// Store added tokens reference
 			this.initialTokens = tokensToAdd;
 			
-			this.utils.showTemporaryMessage(`Added ${tokensToAdd.length} tokens from DexScreener!`);
+			this.utils.showTemporaryMessage(`Added ${tokensToAdd.length} tokens to the cube!`);
 		} catch (error) {
-			console.error("Error adding initial tokens from DexScreener:", error);
-			this.startDemoMode(); // Fallback to demo mode
+			console.error("Error adding initial tokens:", error);
+			// Don't auto-start demo mode on error
+			this.utils.showTemporaryMessage('Error loading token data - check console for details');
 		}
 	}
 	
@@ -329,97 +367,14 @@ class MemeCube {
 	 * Display a demo token in the visualizations
 	 */
 	async showDemoToken() {
-		// Ensure we have a DexScreener manager
-		if (!this.dexScreenerManager) return;
+		// Ensure we have a visualization manager
+		if (!this.visualizationManager) return;
 		
 		this.utils.showTemporaryMessage('Loading demo token...');
 		
 		try {
-			// If we don't have token data yet, fetch it
-			if (!this.dexScreenerManager.tokenData || this.dexScreenerManager.tokenData.length === 0) {
-				await this.dexScreenerManager.refreshAllTokenData();
-			}
-			
-			// Choose a showcase token (use the first one with complete data)
-			let demoToken = null;
-			
-			// Find a token with complete data
-			for (const token of this.dexScreenerManager.tokenData) {
-				if (token.priceUsd && token.marketCap && token.baseToken?.symbol) {
-					demoToken = token;
-					break;
-				}
-			}
-			
-			// If no token found with complete data, use the first one
-			if (!demoToken && this.dexScreenerManager.tokenData && this.dexScreenerManager.tokenData.length > 0) {
-				demoToken = this.dexScreenerManager.tokenData[0];
-			}
-			
-			// If we still don't have a token, create a sample one
-			if (!demoToken) {
-				demoToken = {
-					baseToken: { symbol: 'DEMO' },
-					priceUsd: '1.2345',
-					marketCap: 1000000,
-					priceChange: { h24: 5.67 },
-					url: 'https://example.com',
-					chainId: 'eth'
-				};
-			}
-			
-			// Ensure visualizations are visible
-			if (this.dexScreenerManager.showVisualizations === false) {
-				this.dexScreenerManager.toggleVisualizations();
-			}
-			
-			// Update scoreboard
-			if (this.dexScreenerManager.tokenScoreboard && this.dexScreenerManager.tokenData) {
-				// Create an array with the demo token and a few more if available
-				const displayTokens = [demoToken];
-				
-				// Add a few more tokens if available
-				for (let i = 0; i < 4; i++) {
-					if (i < this.dexScreenerManager.tokenData.length && 
-						this.dexScreenerManager.tokenData[i] !== demoToken) {
-						displayTokens.push(this.dexScreenerManager.tokenData[i]);
-					}
-				}
-				
-				this.dexScreenerManager.tokenScoreboard.updateTokenData(displayTokens);
-			}
-			
-			// Update chart
-			if (this.dexScreenerManager.tokenChart) {
-				await this.dexScreenerManager.fetchAndUpdateTokenChart(demoToken);
-			}
-			
-			// Get token symbol
-			const tokenSymbol = demoToken.baseToken?.symbol || demoToken.tokenAddress?.substring(0, 8) || 'DEMO';
-			
-			// Check if token is already in cluster
-			const existingTag = this.tagsManager.tags.find(tag => 
-				tag.originalName === tokenSymbol || 
-				tag.name === `$${tokenSymbol}`
-			);
-			
-			if (existingTag) {
-				// Token already exists, just provide visual feedback
-				this.tagsManager.tagManager.pulseTag(existingTag);
-				this.utils.showTemporaryMessage(`Token $${tokenSymbol} is already in the cluster!`);
-			} else {
-				// Calculate size but ensure it's visible
-				const tokenSize = Math.max(0.6, this.dexScreenerManager.calculateTokenSize(demoToken));
-				
-				// Add new token to cluster
-				await this.tagsManager.addTag(
-					tokenSymbol,
-					demoToken.url || '#',
-					tokenSize
-				);
-				
-				this.utils.showTemporaryMessage(`Showing demo token: $${tokenSymbol}`);
-			}
+			// Use the visualization manager's showDemoToken method
+			await this.visualizationManager.showDemoToken();
 		} catch (error) {
 			console.error('Error showing demo token:', error);
 			this.utils.showTemporaryMessage('Error loading demo token');
@@ -494,8 +449,8 @@ class MemeCube {
 		// Update the raycaster with the mouse position and camera
 		this.raycaster.setFromCamera(this.mouse, this.scene.camera);
 		
-		// Check if click was handled by DexScreener visualizations
-		if (this.dexScreenerManager && this.dexScreenerManager.handleInteraction(this.raycaster)) {
+		// Check if click was handled by visualizations
+		if (this.visualizationManager && this.visualizationManager.handleInteraction(this.raycaster)) {
 			return; // Interaction was handled by visualizations
 		}
 		
@@ -548,9 +503,9 @@ class MemeCube {
 		// Update controls
 		this.controls.update();
 		
-		// Update DexScreener visualizations with camera movement info
-		if (this.dexScreenerManager) {
-			this.dexScreenerManager.update(deltaTime, isCameraMoving);
+		// Update visualizations with camera movement info
+		if (this.visualizationManager) {
+			this.visualizationManager.update(deltaTime, isCameraMoving);
 		}
 	}
 }

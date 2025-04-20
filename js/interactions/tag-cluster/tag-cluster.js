@@ -1,293 +1,475 @@
-import * as THREE from 'three';
-import { Utils } from '../../utils/utils.js';
-
 /**
- * TagCluster - Integration layer between DexScreener token data and tag system
- * 
- * This class is responsible for:
- * 1. Converting token data from DexScreener into tags in the 3D space
- * 2. Updating token tags when their data changes (price, market cap)
- * 3. Handling token-specific visualization features (color coding by price change)
- * 4. Managing the lifecycle of token tags (add/update/remove)
- * 
- * Usage flow:
- * - DexScreenerManager creates this class and provides token data
- * - This class uses the TagsManager to add/update tags based on tokens
- * - Token properties like market cap determine tag size
- * - Price changes are reflected in tag colors
- * 
- * Implementation notes:
- * - Replaced the previous token-cube.js with improved physics
- * - Maintains mappings between token symbols and tag IDs
- * - Uses market cap for sizing tags proportionally
- * - Colors tags based on price movement (green for up, red for down)
+ * TagCluster - Integration layer between DexScreener token data and the tag system
+ * Creates and manages tags based on token data with market cap-based sizing
  */
+
+import { TagManager } from '../tag-manager.js';
+import { TagPhysics } from '../tag-physics.js';
+
 export class TagCluster {
-	constructor(scene, camera, tagsManager) {
+	/**
+	 * Create a new TagCluster
+	 * @param {THREE.Scene} scene - Three.js scene
+	 * @param {THREE.Camera} camera - Three.js camera
+	 * @param {Object} options - Configuration options
+	 */
+	constructor(scene, camera, options = {}) {
+		// Store references
 		this.scene = scene;
 		this.camera = camera;
-		this.tagsManager = tagsManager;
-		this.utils = new Utils();
 		
-		// Token data tracking
-		this.tokenSymbols = new Set(); // Track which tokens we've added
-		this.symbolToTagId = new Map(); // Map symbols to tag IDs
+		// Configuration
+		this.options = {
+			maxTags: 50,                     // Maximum number of tags to display
+			updateInterval: 10000,           // How often to update tokens (ms)
+			minTagSize: 0.5,                 // Minimum tag size
+			maxTagSize: 2.0,                 // Maximum tag size
+			initialTagCount: 5,              // Initial number of tags
+			baseTokenUrl: 'https://dexscreener.com/ethereum/',
+			...options
+		};
 		
-		// Token update settings - more frequent updates
-		this.updateInterval = 5000; // Update every 5 seconds (reduced from 6000)
+		// Create the tag manager
+		this.tagManager = new TagManager(scene, camera);
+		
+		// Track tokens and tags
+		this.tokens = [];           // Token data from DexScreener
+		this.tokenTags = new Map(); // Map token addresses to tag IDs
+		
+		// State tracking
+		this.initialized = false;
 		this.lastUpdateTime = 0;
-		
-		// Size settings - narrower range for better cluster cohesion
-		this.minTokenSize = 0.6;  // Increased from 0.5
-		this.maxTokenSize = 1.2;  // Reduced from 2.0
-		
-		// Create container group for compatibility with old code
-		this.cubeGroup = new THREE.Group();
-		this.scene.add(this.cubeGroup);
-		
-		// Visibility state
-		this.isVisible = true;
-		
-		console.log("TagCluster initialized - will add tokens through tag system");
+		this.updateCallback = null;
 	}
 	
 	/**
-	 * Update tokens with new data from DexScreener
-	 * @param {Array} tokenData - Array of token data objects
+	 * Initialize the tag cluster with initial data
+	 * @param {Array} initialTokens - Initial token data
 	 */
-	updateTokens(tokenData) {
-		if (!tokenData || !Array.isArray(tokenData)) return;
+	initialize(initialTokens = []) {
+		if (!this.tagManager.fontLoaded) {
+			// Wait for font to load before initializing
+			setTimeout(() => this.initialize(initialTokens), 100);
+			return;
+		}
 		
-		const currentTime = Date.now();
-		this.lastUpdateTime = currentTime;
+		// Store initial tokens
+		this.tokens = [...initialTokens];
 		
-		// Step 1: Track current tokens
-		const currentTokenSymbols = new Set(this.tokenSymbols);
-		const newTokenSymbols = new Set();
+		// Add initial tags if we have tokens
+		if (this.tokens.length > 0) {
+			// Add up to initialTagCount tags
+			const tagsToAdd = Math.min(this.options.initialTagCount, this.tokens.length);
+			
+			for (let i = 0; i < tagsToAdd; i++) {
+				this.addTokenTag(this.tokens[i]);
+			}
+		}
 		
-		// Record all valid symbols from new data
-		tokenData.forEach(token => {
-			if (token.baseToken?.symbol) {
-				newTokenSymbols.add(token.baseToken.symbol);
+		// Mark as initialized
+		this.initialized = true;
+		console.log('Tag cluster initialized with', this.tokenTags.size, 'tokens');
+	}
+	
+	/**
+	 * Update the tag cluster with new token data
+	 * @param {Array} newTokens - New token data from DexScreener
+	 */
+	updateTokens(newTokens) {
+		if (!this.initialized || !newTokens) return;
+		
+		// Track the current time
+		const now = Date.now();
+		
+		// Check if we should update (rate limiting)
+		if (now - this.lastUpdateTime < this.options.updateInterval) {
+			return;
+		}
+		
+		// Store the last update time
+		this.lastUpdateTime = now;
+		
+		// Store the new tokens
+		this.tokens = [...newTokens];
+		
+		// Track tokens to add and remove
+		const existingTokenAddresses = Array.from(this.tokenTags.keys());
+		const newTokenAddresses = this.tokens.map(t => `${t.chainId}-${t.tokenAddress}`);
+		
+		// Find tokens to remove (no longer in the list)
+		const tokensToRemove = existingTokenAddresses.filter(
+			addr => !newTokenAddresses.includes(addr)
+		);
+		
+		// Find tokens to add (new tokens, up to max tags)
+		const tokensToAdd = this.tokens.filter(t => {
+			const key = `${t.chainId}-${t.tokenAddress}`;
+			return !this.tokenTags.has(key);
+		});
+		
+		// Remove old tokens
+		tokensToRemove.forEach(addr => this.removeTokenTag(addr));
+		
+		// Add new tokens (up to max tags)
+		const tagsToAdd = Math.min(
+			tokensToAdd.length,
+			this.options.maxTags - this.tokenTags.size
+		);
+		
+		for (let i = 0; i < tagsToAdd; i++) {
+			this.addTokenTag(tokensToAdd[i]);
+		}
+		
+		// Update existing token tags
+		this.tokens.forEach(token => {
+			const key = `${token.chainId}-${token.tokenAddress}`;
+			if (this.tokenTags.has(key)) {
+				this.updateTokenTag(token);
 			}
 		});
 		
-		// Step 2: Process tokens to add (in new data but not current)
-		for (const token of tokenData) {
-			if (!token.baseToken?.symbol) continue;
-			
-			const symbol = token.baseToken.symbol;
-			
-			if (!currentTokenSymbols.has(symbol)) {
-				this.addToken(token);
+		// If we have an update callback, call it
+		if (this.updateCallback) {
+			this.updateCallback(this.tokens, this.tokenTags);
+		}
+	}
+	
+	/**
+	 * Add a new tag for a token
+	 * @param {Object} token - Token data from DexScreener
+	 * @returns {Object|null} - The created tag or null
+	 */
+	addTokenTag(token) {
+		if (!token) {
+			console.warn("Attempted to add null token");
+			return null;
+		}
+		
+		// Extract chainId and tokenAddress, handling different data structures
+		let chainId = token.chainId;
+		let tokenAddress = token.tokenAddress;
+		
+		// Handle case where data is nested differently
+		if (!chainId && token.baseToken && token.baseToken.chainId) {
+			chainId = token.baseToken.chainId;
+		}
+		
+		if (!tokenAddress && token.baseToken && token.baseToken.address) {
+			tokenAddress = token.baseToken.address;
+		}
+		
+		// If we still don't have the required fields, use fallbacks
+		if (!chainId) chainId = 'eth'; // Default to Ethereum
+		
+		if (!tokenAddress) {
+			// Create a unique identifier based on what we do have
+			if (token.pairAddress) {
+				tokenAddress = token.pairAddress;
+			} else if (token.baseToken?.symbol) {
+				tokenAddress = `symbol-${token.baseToken.symbol}`;
+			} else if (token.symbol) {
+				tokenAddress = `symbol-${token.symbol}`;
 			} else {
-				this.updateToken(token);
+				// Use a timestamp as last resort
+				tokenAddress = `token-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
 			}
 		}
 		
-		// Step 3: Process tokens to remove (in current but not in new data)
-		for (const symbol of currentTokenSymbols) {
-			if (!newTokenSymbols.has(symbol)) {
-				this.removeToken(symbol);
-			}
+		// Generate key for this token
+		const tokenKey = `${chainId}-${tokenAddress}`;
+		
+		// Skip if already added
+		if (this.tokenTags.has(tokenKey)) {
+			return null;
 		}
-	}
-	
-	/**
-	 * Add a new token to the visualization using the tag system
-	 * @param {Object} tokenData - Token data from DexScreener
-	 */
-	async addToken(tokenData) {
-		if (!tokenData.baseToken?.symbol) return;
 		
-		const symbol = tokenData.baseToken.symbol;
-		const marketCap = tokenData.marketCap || 1000000; // Default if not available
-		const size = this.calculateTokenSize(marketCap);
-		const url = tokenData.url || `https://dexscreener.com/${tokenData.chainId || 'eth'}/${tokenData.pairAddress || ''}`;
-		
-		try {
-			// Add through tag manager (which handles entry animations)
-			const tag = await this.tagsManager.addTag(symbol, url, size);
-			
-			if (tag) {
-				// Store mapping for future updates
-				this.symbolToTagId.set(symbol, tag.id);
-				this.tokenSymbols.add(symbol);
-				
-				// Track additional token metadata in the tag object
-				tag.metadata = {
-					isToken: true,
-					marketCap: marketCap,
-					chainId: tokenData.chainId || 'unknown',
-					priceUsd: tokenData.priceUsd || '0',
-					priceChange: tokenData.priceChange?.h24 || 0
-				};
-				
-				// Set tag color based on price change with improved colors
-				if (tag.mesh && tag.mesh.material) {
-					const priceChange = tokenData.priceChange?.h24 || 0;
-					this.applyPriceChangeColor(tag, priceChange);
-				}
-			}
-		} catch (error) {
-			console.error(`Error adding token ${symbol} to tag cluster:`, error);
-		}
-	}
-	
-	/**
-	 * Apply price change color to tag with improved visuals
-	 * @param {Object} tag - Tag object
-	 * @param {number} priceChange - Price change percentage
-	 */
-	applyPriceChangeColor(tag, priceChange) {
-		if (!tag.mesh || !tag.mesh.material) return;
-		
-		if (priceChange > 0) {
-			// Brighter green for positive (improved from previous values)
-			tag.mesh.material.color.setRGB(0.25, 0.9, 0.35);
-			tag.mesh.material.emissive.setRGB(0.12, 0.35, 0.15);
-			tag.mesh.material.emissiveIntensity = 0.25;
-		} else if (priceChange < 0) {
-			// Brighter red for negative (improved from previous values)
-			tag.mesh.material.color.setRGB(0.9, 0.25, 0.25);
-			tag.mesh.material.emissive.setRGB(0.35, 0.12, 0.12);
-			tag.mesh.material.emissiveIntensity = 0.25;
+		// Determine symbol to display
+		let symbol;
+		if (token.baseToken?.symbol) {
+			symbol = token.baseToken.symbol;
+		} else if (token.symbol) {
+			symbol = token.symbol;
+		} else if (token.name) {
+			symbol = token.name;
 		} else {
-			// Brighter blue for neutral (improved from previous values)
-			tag.mesh.material.color.setRGB(0.25, 0.6, 0.9);
-			tag.mesh.material.emissive.setRGB(0.1, 0.25, 0.35);
-			tag.mesh.material.emissiveIntensity = 0.2;
+			// Fall back to a generic name
+			symbol = 'TOKEN';
 		}
-	}
-	
-	/**
-	 * Update an existing token with new data
-	 * @param {Object} tokenData - New token data
-	 */
-	updateToken(tokenData) {
-		if (!tokenData.baseToken?.symbol) return;
 		
-		const symbol = tokenData.baseToken.symbol;
-		const tagId = this.symbolToTagId.get(symbol);
+		// Calculate tag size based on market data
+		const size = this.calculateTokenSize(token);
 		
-		if (!tagId) return;
+		// Generate URL for this token
+		const tokenUrl = this.generateTokenUrl(token);
 		
-		// Calculate new size based on market cap
-		const marketCap = tokenData.marketCap || 1000000;
-		const newSize = this.calculateTokenSize(marketCap);
+		// Add $ prefix to symbol if not already present
+		const displaySymbol = symbol.startsWith('$') ? symbol : `$${symbol}`;
 		
-		// Get tag from tags manager's tags array
-		const tag = this.tagsManager.tags.find(t => t.id === tagId);
+		console.log(`Creating tag for token: ${displaySymbol} with size ${size.toFixed(2)}`);
 		
+		// Create the tag
+		const tag = this.tagManager.createTag(displaySymbol, tokenUrl, {
+			scale: size,
+			size: 0.5,     // Base text size before scaling
+			depth: 0.65,   // Extrusion depth 
+			token: token   // Store reference to token data
+		});
+		
+		// If successful, store in our mapping
 		if (tag) {
-			// Update metadata
-			tag.metadata = {
-				...tag.metadata,
-				marketCap: marketCap,
-				priceUsd: tokenData.priceUsd || '0',
-				priceChange: tokenData.priceChange?.h24 || 0
-			};
+			this.tokenTags.set(tokenKey, tag.id);
+			console.log(`Added token tag: ${displaySymbol} with size ${size.toFixed(2)}`);
+		} else {
+			console.error(`Failed to create tag for token: ${displaySymbol}`);
+		}
+		
+		return tag;
+	}
+	
+	/**
+	 * Update an existing token tag with new data
+	 * @param {Object} token - Updated token data
+	 * @returns {boolean} - Whether the update was successful
+	 */
+	updateTokenTag(token) {
+		if (!token) {
+			return false;
+		}
+		
+		// Extract chainId and tokenAddress, handling different data structures
+		let chainId = token.chainId;
+		let tokenAddress = token.tokenAddress;
+		
+		// Handle case where data is nested differently
+		if (!chainId && token.baseToken && token.baseToken.chainId) {
+			chainId = token.baseToken.chainId;
+		}
+		
+		if (!tokenAddress && token.baseToken && token.baseToken.address) {
+			tokenAddress = token.baseToken.address;
+		}
+		
+		// If we still don't have the required fields, try fallbacks
+		if (!chainId) chainId = 'eth'; // Default to Ethereum
+		
+		if (!tokenAddress) {
+			// Try to use other identifiers
+			if (token.pairAddress) {
+				tokenAddress = token.pairAddress;
+			} else if (token.baseToken?.symbol) {
+				tokenAddress = `symbol-${token.baseToken.symbol}`;
+			} else if (token.symbol) {
+				tokenAddress = `symbol-${token.symbol}`;
+			} else {
+				// Not enough info to identify the token
+				return false;
+			}
+		}
+		
+		// Generate key for this token
+		const tokenKey = `${chainId}-${tokenAddress}`;
+		
+		// Get existing tag ID
+		const tagId = this.tokenTags.get(tokenKey);
+		if (!tagId) return false;
+		
+		// Find the tag object
+		const tag = this.tagManager.tags.find(t => t.id === tagId);
+		if (!tag) return false;
+		
+		// Calculate new size based on updated market data
+		const newSize = this.calculateTokenSize(token);
+		
+		// Only resize if the size has changed significantly (>5%)
+		const currentSize = tag.mesh?.scale.x || 0;
+		if (Math.abs(newSize - currentSize) / currentSize > 0.05) {
+			this.tagManager.resizeTag(tagId, newSize);
+		}
+		
+		// Update token reference
+		tag.token = token;
+		
+		return true;
+	}
+	
+	/**
+	 * Remove a token tag
+	 * @param {string} tokenKey - Token key to remove
+	 * @returns {boolean} - Whether removal was successful
+	 */
+	removeTokenTag(tokenKey) {
+		// Get tag ID
+		const tagId = this.tokenTags.get(tokenKey);
+		if (!tagId) return false;
+		
+		// Find the tag to get its name for logging
+		const tag = this.tagManager.tags.find(t => t.id === tagId);
+		const name = tag ? tag.originalName : tokenKey;
+		
+		// Remove from tag manager
+		this.tagManager.removeTag(tagId);
+		
+		// Remove from our mapping
+		this.tokenTags.delete(tokenKey);
+		
+		console.log(`Removed token tag: ${name}`);
+		return true;
+	}
+	
+	/**
+	 * Calculate token size based on market data
+	 * @param {Object} token - Token data
+	 * @returns {number} - Size value between minTagSize and maxTagSize
+	 */
+	calculateTokenSize(token) {
+		const { minTagSize, maxTagSize } = this.options;
+		
+		// Base size
+		let size = 1.0;
+		
+		// Handle different token data structures
+		const marketCap = parseFloat(token.marketCap || token.fdv || 0);
+		const liquidity = parseFloat(
+			token.liquidity?.usd || 
+			(token.liquidity && typeof token.liquidity === 'string' ? token.liquidity : 0)
+		);
+		
+		let priceChange = 0;
+		if (token.priceChange?.h24) {
+			priceChange = parseFloat(token.priceChange.h24);
+		} else if (token.priceChange) {
+			priceChange = parseFloat(token.priceChange);
+		}
+		
+		// If we have market cap, use it as primary size factor
+		if (marketCap > 0) {
+			// Logarithmic scale between $10K and $10B
+			const minMarketCap = 10_000;      // $10K
+			const maxMarketCap = 10_000_000_000; // $10B
 			
-			// Only update size if it changed significantly (>10%)
-			const currentSize = tag.mesh ? tag.mesh.scale.x : 1;
-			if (Math.abs(newSize - currentSize) / currentSize > 0.1) {
-				this.tagsManager.tagManager.resizeTag(tagId, newSize);
-			}
+			// Use logarithmic scale
+			const logMin = Math.log(minMarketCap);
+			const logMax = Math.log(maxMarketCap);
+			const logValue = Math.log(Math.max(minMarketCap, Math.min(maxMarketCap, marketCap)));
+			
+			// Normalize to 0-1 range
+			const normalizedValue = (logValue - logMin) / (logMax - logMin);
+			
+			// Calculate size
+			size = minTagSize + (maxTagSize - minTagSize) * normalizedValue;
+		} 
+		// Fallback to liquidity if no market cap
+		else if (liquidity > 0) {
+			// Logarithmic scale between $1K and $1M
+			const minLiquidity = 1_000;       // $1K
+			const maxLiquidity = 1_000_000;   // $1M
+			
+			// Use logarithmic scale
+			const logMin = Math.log(minLiquidity);
+			const logMax = Math.log(maxLiquidity);
+			const logValue = Math.log(Math.max(minLiquidity, Math.min(maxLiquidity, liquidity)));
+			
+			// Normalize to 0-1 range
+			const normalizedValue = (logValue - logMin) / (logMax - logMin);
+			
+			// Calculate size
+			size = minTagSize + (maxTagSize - minTagSize) * normalizedValue;
+		}
+		
+		// Bonus size boost for high price change (positive or negative)
+		if (priceChange !== 0) {
+			const absPriceChange = Math.abs(priceChange);
+			
+			// If price change is significant (>5%), boost size
+			if (absPriceChange > 5) {
+				// Cap at 50% change
+				const changeFactor = Math.min(absPriceChange, 50) / 50; 
 				
-			// Update color based on price change
-			if (tag.mesh && tag.mesh.material) {
-				const priceChange = tokenData.priceChange?.h24 || 0;
-				this.applyPriceChangeColor(tag, priceChange);
+				// Add up to 30% bonus size for high volatility
+				size *= (1 + changeFactor * 0.3);
 			}
+		}
+		
+		// Ensure size is within bounds
+		return Math.max(minTagSize, Math.min(size, maxTagSize));
+	}
+	
+	/**
+	 * Generate a URL for a token
+	 * @param {Object} token - Token data
+	 * @returns {string} - URL for the token
+	 */
+	generateTokenUrl(token) {
+		if (!token) return this.options.baseTokenUrl;
+		
+		// Extract chainId, handling different data structures
+		let chainId = token.chainId;
+		if (!chainId && token.baseToken && token.baseToken.chainId) {
+			chainId = token.baseToken.chainId;
+		}
+		if (!chainId) chainId = 'ethereum'; // Default to Ethereum
+		
+		// For tokens with a pairAddress, use that for a specific URL
+		if (token.pairAddress) {
+			return `https://dexscreener.com/${chainId}/${token.pairAddress}`;
+		}
+		
+		// For tokens with just an address, use token URL
+		if (token.tokenAddress) {
+			return `https://dexscreener.com/${chainId}/${token.tokenAddress}`;
+		}
+		
+		// For tokens with baseToken address
+		if (token.baseToken && token.baseToken.address) {
+			return `https://dexscreener.com/${chainId}/${token.baseToken.address}`;
+		}
+		
+		// If token has a URL directly
+		if (token.url) {
+			return token.url;
+		}
+		
+		// Fallback to base URL
+		return this.options.baseTokenUrl;
+	}
+	
+	/**
+	 * Set a callback for token updates
+	 * @param {Function} callback - Function to call on token updates
+	 */
+	setUpdateCallback(callback) {
+		if (typeof callback === 'function') {
+			this.updateCallback = callback;
 		}
 	}
 	
 	/**
-	 * Remove a token from the visualization
-	 * @param {string} symbol - Token symbol to remove
+	 * Update function to be called every frame
 	 */
-	removeToken(symbol) {
-		const tagId = this.symbolToTagId.get(symbol);
-		if (!tagId) return;
-		
-		// Remove from tag system
-		this.tagsManager.tagManager.removeTag(tagId);
-		
-		// Remove from tracking maps
-		this.symbolToTagId.delete(symbol);
-		this.tokenSymbols.delete(symbol);
-	}
-	
-	/**
-	 * Calculate token size based on market cap
-	 * @param {number} marketCap - Token market cap
-	 * @returns {number} - Calculated size
-	 */
-	calculateTokenSize(marketCap) {
-		// Use a logarithmic scale for better visualization
-		if (!marketCap || marketCap <= 0) return this.minTokenSize;
-		
-		const log10 = Math.log10(marketCap);
-		const minLog = Math.log10(100000); // $100K minimum
-		const maxLog = Math.log10(10000000000); // $10B maximum
-		
-		// Normalize the log value to 0-1 range
-		const normalizedSize = (log10 - minLog) / (maxLog - minLog);
-		
-		// Clamp between 0 and 1
-		const clampedSize = Math.max(0, Math.min(1, normalizedSize));
-		
-		// More consistent sizing with less randomness for better isometric structure
-		// Reduced random variance from ±15% to ±8%
-		const randomFactor = 1.0 + (Math.random() * 0.16 - 0.08);
-		
-		return (this.minTokenSize + clampedSize * (this.maxTokenSize - this.minTokenSize)) * randomFactor;
-	}
-	
-	/**
-	 * Update the cluster visualization
-	 * @param {number} deltaTime - Time since last update in seconds
-	 */
-	update(deltaTime) {
-		// Most update logic is now handled by TagsManager and TagPhysics
-		// This method is here for compatibility with the previous token-cube.js
-		
-		// Pass token size updates to TagsManager occasionally
-		if (this.tagsManager && this.tokenSymbols.size > 0) {
-			// Occasionally update tag sizes to reflect any changes in market cap
-			const updateChance = Math.random();
-			if (updateChance < 0.05) { // 5% chance each frame
-				this.updateTagSizes();
-			}
+	update() {
+		// Update tag manager
+		if (this.tagManager) {
+			this.tagManager.update();
 		}
 	}
 	
 	/**
-	 * Update tag sizes based on their market cap data
+	 * Dispose of resources
 	 */
-	updateTagSizes() {
-		// Update sizes for token tags
-		for (const [symbol, tagId] of this.symbolToTagId.entries()) {
-			const tag = this.tagsManager.tags.find(t => t.id === tagId);
-			if (tag && tag.metadata?.marketCap) {
-				const newSize = this.calculateTokenSize(tag.metadata.marketCap);
-				const currentSize = tag.mesh ? tag.mesh.scale.x : 1;
-				
-				// Only update if significant change (reduced threshold to 12% from 15%)
-				if (Math.abs(newSize - currentSize) / currentSize > 0.12) {
-					this.tagsManager.tagManager.resizeTag(tagId, newSize);
-				}
-			}
+	dispose() {
+		// Clean up tag manager
+		if (this.tagManager) {
+			// Remove all tags
+			const tagIds = this.tagManager.tags.map(tag => tag.id);
+			tagIds.forEach(id => this.tagManager.removeTag(id));
+			
+			// Clear token tag map
+			this.tokenTags.clear();
 		}
+		
+		// Clear tokens
+		this.tokens = [];
+		
+		console.log('Tag cluster disposed');
 	}
-	
-	/**
-	 * Handle interaction - now using TagManager's own interaction handling
-	 * @param {THREE.Raycaster} raycaster - Raycaster for interaction
-	 * @returns {boolean} Whether interaction occurred
-	 */
-	handleInteraction(raycaster) {
-		// Now handled by TagManager directly
-		return false;
-	}
-} 
+}

@@ -27,7 +27,19 @@ MemeIsometric Cluster is a Three.js-based web application where meme coin tags a
 
 ## Recent Updates
 
-### Physics Engine Improvements (July 2024)
+### Borg Structure Enhancement
+
+The tag structure has been refined to create a true Borg-like appearance:
+
+- **Zero-width Spacing**: Tags now have no spacing between them, creating a perfect Borg-like unified structure
+- **Bevels Removed**: Text geometry no longer has bevels, eliminating visual gaps between tags
+- **Metallic Appearance**: Increased metalness and unified coloring to enhance the Borg aesthetic
+- **Minimal Separation**: Collision response now maintains near-perfect alignment with minimal separation
+- **Stronger Central Pull**: Tags are pulled more strongly toward the center, maintaining the dense structure
+- **Enhanced Face Balancing**: Tags distribute more evenly across all faces, improving the cube formation
+- **Improved Visual Cohesion**: The structure appears as one perfectly unified entity with no visible seams
+
+### Physics Engine Improvements 
 
 The tag physics system has been refined for a more organized structure:
 
@@ -39,7 +51,7 @@ The tag physics system has been refined for a more organized structure:
 - **Improved Face Tracking**: System now tracks and balances tag distribution automatically
 - **Optimized Collision Response**: Tags respond to collisions in a more organized manner
 
-### Physics Engine Enhancements (June 2024)
+### Physics Engine Enhancements 
 
 The tag physics system had been completely rewritten for more accurate and stable behavior:
 

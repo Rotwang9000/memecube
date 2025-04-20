@@ -55,48 +55,57 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
 
 ## Architecture
 
-### Data Processing Architecture
+The application follows a modular architecture to allow for better maintainability and extensibility.
 
-The application now uses a modular data processing architecture:
+### Data Flow
 
-1. **Base DataProcessor Class**
-   - Handles common operations like fetching, caching, and data management
-   - Provides callback system for notifying components of data updates
-   - Defines a common interface that all processors must implement
+1. Token data is fetched and processed by provider-agnostic data providers
+2. Visualizations use this data to render 3D representations
+3. User interactions with visualizations trigger actions
 
-2. **Specific Processors**
-   - `DexScreenerProcessor`: Fetches and processes data from DexScreener API
-   - `CoinGeckoProcessor`: Sample implementation for CoinGecko API (for demonstration)
-   - Future processors can be added for other data sources
+### Provider-Agnostic System
 
-3. **UI Components**
-   - UI elements are decoupled from specific data sources
-   - Components register as listeners with data processors
-   - This allows any visualization to be used with any data source
+The system is designed to be provider-agnostic, separating data providers from visualizations:
 
-### Folder Structure
+1. `TokenDataProvider` - Base interface for any data provider
+2. Specific implementations (like `DexScreenerProvider`) handle provider-specific logic
+3. `VisualizationManager` uses any `TokenDataProvider` to display data
+
+This architecture allows:
+- Easy switching between different data sources
+- Consistent visualization regardless of data source
+- Testing with mock data providers
+- Adding new data sources without changing visualization code
+
+### Directory Structure
 
 ```
-js/
-├── core/             # Core application components
-│   ├── controls.js
-│   └── scene.js
-├── data-processors/  # Data processing modules
-│   ├── DataProcessor.js
-│   ├── DexScreenerProcessor.js
-│   └── CoinGeckoProcessor.js
-├── interactions/     # Tag interactions
-│   ├── tags.js
-│   ├── tag-animation.js
-│   ├── tag-creator.js
-│   └── ...
-├── ui/               # UI components
-│   └── DexScreenerManager.js
-├── utils/            # Utility functions
-│   └── utils.js
-├── visualizations/   # 3D visualizations
-│   ├── token-chart-3d.js
-│   ├── token-cube.js
-│   └── token-scoreboard.js
-└── main.js           # Main application entry point
+memecube/
+├── 📁 assets/
+│   └── [...]
+├── 📁 css/
+│   └── [...]
+├── 📁 js/
+│   ├── 📁 core/
+│   │   ├── scene.js
+│   │   └── [...]
+│   ├── 📁 data-providers/
+│   │   ├── TokenDataProvider.js
+│   │   ├── DexScreenerProvider.js
+│   │   └── [...]
+│   ├── 📁 interactions/
+│   │   ├── 📁 tag-cluster/
+│   │   │   ├── tags.js
+│   │   │   └── tag-cluster.js
+│   │   └── [...]
+│   ├── 📁 ui/
+│   │   └── VisualizationManager.js
+│   ├── 📁 utils/
+│   │   └── [...]
+│   ├── 📁 visualizations/
+│   │   ├── token-scoreboard.js
+│   │   ├── token-chart-3d.js
+│   │   └── [...]
+│   └── main.js
+└── index.html
 ``` 

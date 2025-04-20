@@ -1,97 +1,65 @@
-import * as THREE from 'three';
-import { TagManager } from './tag-manager.js';
-
 /**
- * TagsManager - Main public API for the tag cluster system
- * 
- * This class serves as:
- * 1. A compatibility wrapper around the new TagManager/TagPhysics system
- * 2. The primary entry point for other application components to interact with tags
- * 3. A manager for tag aging and lifecycle features
- * 
- * Usage guidelines:
- * - Always use this class rather than accessing TagManager/TagPhysics directly
- * - Use addTag() to add new tags to the system
- * - Access tags array for read operations only
- * - For tag removal or updates, use the methods provided here
- * 
- * Implementation notes:
- * - This class maintains backwards compatibility with older code
- * - It delegates core functionality to the TagManager class
- * - Tag aging and demo functionality are implemented at this level
+ * TagsManager - High-level compatibility wrapper for backward compatibility with the old system
+ * Handles tag aging, demo functionality, and provides a consistent API
  */
+
+import { TagManager } from '../tag-manager.js';
+
 export class TagsManager {
-	constructor(scene, camera) {
+	/**
+	 * Create a new TagsManager
+	 * @param {THREE.Scene} scene - Three.js scene
+	 * @param {THREE.Camera} camera - Three.js camera
+	 * @param {Object} options - Configuration options
+	 */
+	constructor(scene, camera, options = {}) {
+		// Store references
 		this.scene = scene;
 		this.camera = camera;
 		
-		// Create the new tag manager
-		this.tagManager = new TagManager(scene, camera);
+		// Create the core TagManager
+		this.tagManager = new TagManager(scene, camera, options);
 		
-		// Create container for tags (for compatibility)
-		this.coreGroup = new THREE.Group();
-		this.scene.add(this.coreGroup);
-		
-		// Initialize tag age system
-		this.lastAgeUpdateTime = Date.now();
-		
-		// For compatibility with old code
+		// Reference tags directly from the TagManager for compatibility
 		this.tags = this.tagManager.tags;
-		this.cubeRadius = 1;
-		this.growthFactor = 1.0;
 		
-		console.log('TagsManager initialized with new physics-based system');
+		// Track tag age for resizing
+		this.lastAgeUpdateTime = Date.now();
+		this.ageUpdateInterval = options.ageUpdateInterval || 30000; // 30 seconds
+		
+		// Demo functionality
+		this.demoActive = false;
+		this.demoAddInterval = null;
+		this.demoTags = [
+			'BTC', 'ETH', 'SOL', 'DOGE', 'SHIB', 'PEPE', 'FLOKI', 
+			'BONK', 'WIF', 'MEME', 'TURBO', 'SHIBA', 'ELON', 'APE'
+		];
 	}
 	
 	/**
-	 * Add a new tag to the system
-	 * @param {string} text - The tag text
-	 * @param {string} url - The URL associated with the tag
-	 * @param {number} size - The size of the tag
-	 * @returns {Object} The created tag object
+	 * Add a new tag
+	 * @param {string} text - Tag text (without $ prefix)
+	 * @param {string} url - URL to navigate to when clicked
+	 * @param {number} size - Size of the tag (0.5-2.0)
+	 * @returns {Promise<Object|null>} - Created tag or null
 	 */
 	async addTag(text, url, size = null) {
-		// Wait for font to load if it hasn't already
-		if (!this.tagManager.fontLoaded) {
-			await new Promise(resolve => {
-				const checkFont = () => {
-					if (this.tagManager.fontLoaded) {
-						resolve();
-					} else {
-						setTimeout(checkFont, 100);
-					}
-				};
-				checkFont();
-			});
-		}
+		// Ensure text doesn't have $ prefix (will be added by TagManager)
+		const tagText = text.startsWith('$') ? text.substring(1) : text;
 		
 		// Determine final size
-		let finalSize;
-		if (size !== null) {
-			finalSize = size;
-		} else {
-			// Generate a more consistent size range for better isometric structure
-			// Narrower size range (0.6-0.9) for more uniform appearance
-			const baseSize = 0.6 + Math.random() * 0.3;
-			
-			// Occasionally create a larger tag (10% chance)
-			if (Math.random() < 0.10) {
-				finalSize = baseSize * (1.1 + Math.random() * 0.2);
-			} else {
-				finalSize = baseSize;
-			}
-		}
+		let finalSize = size !== null ? size : 1.0;
 		
-		// Create the tag using the new manager
-		const tag = this.tagManager.createTag(text, url, {
+		// Create the tag
+		const tag = this.tagManager.createTag(tagText, url, {
 			scale: finalSize,
 			size: 0.5 // Base text size before scaling
 		});
 		
-		// Update references to ensure we always have the latest tags
+		// Update references
 		this.tags = this.tagManager.tags;
 		
-		// Add age tracking (for compatibility with old system)
+		// Add age tracking
 		if (tag) {
 			tag.creationTime = Date.now();
 			this.sortTagsByAge();
@@ -101,194 +69,202 @@ export class TagsManager {
 	}
 	
 	/**
-	 * Sort tags by age, with oldest first
+	 * Remove a tag
+	 * @param {string} tagId - ID of tag to remove
+	 * @returns {boolean} - Whether removal was successful
 	 */
-	sortTagsByAge() {
-		this.tags.sort((a, b) => a.creationTime - b.creationTime);
+	removeTag(tagId) {
+		const success = this.tagManager.removeTag(tagId);
+		
+		// Update references
+		this.tags = this.tagManager.tags;
+		
+		// Resort by age
+		this.sortTagsByAge();
+		
+		return success;
 	}
 	
 	/**
-	 * Initialize tag age system for all tags
+	 * Remove the oldest tag
+	 * @returns {boolean} - Whether removal was successful
 	 */
-	initializeTagAgeSystem() {
-		const currentTime = Date.now();
+	removeOldestTag() {
+		// Make sure we have tags
+		if (this.tags.length === 0) return false;
 		
-		// Track creation time for all tags that don't have it yet
-		this.tags.forEach((tag, index) => {
-			if (!tag.creationTime) {
-				// Stagger creation times for existing tags
-				// More gradual staggering for smoother aging transitions
-				tag.creationTime = currentTime - (this.tags.length - index) * 2000;
-			}
-		});
+		// Sort by age (oldest first)
+		this.sortTagsByAge();
+		
+		// Remove oldest
+		return this.removeTag(this.tags[0].id);
+	}
+	
+	/**
+	 * Sort tags by age (oldest first)
+	 */
+	sortTagsByAge() {
+		// Sort by creation time (oldest first)
+		this.tags.sort((a, b) => (a.creationTime || 0) - (b.creationTime || 0));
+	}
+	
+	/**
+	 * Update tag sizes based on age
+	 */
+	updateTagSizesByAge() {
+		const now = Date.now();
+		
+		// Only update periodically for performance
+		if (now - this.lastAgeUpdateTime < this.ageUpdateInterval) return;
+		
+		this.lastAgeUpdateTime = now;
 		
 		// Sort tags by age
 		this.sortTagsByAge();
-	}
-	
-	/**
-	 * Generate a random tag for demo mode
-	 * @returns {Object} Random tag object
-	 */
-	generateRandomTag() {
-		const randomText = this.getRandomTagText();
-		const randomUrl = `https://example.com/${randomText.toLowerCase()}`;
 		
-		// More consistent size range (0.65-0.85) for better isometric structure
-		const size = 0.65 + Math.random() * 0.2;
-		
-		return {
-			text: randomText,
-			url: randomUrl,
-			size: size
-		};
-	}
-	
-	/**
-	 * Generate a random tag name
-	 * @returns {string} Random tag name
-	 */
-	getRandomTagText() {
-		const prefixes = ['MOON', 'DOGE', 'SHIB', 'APE', 'FLOKI', 'PEPE', 'CAT', 'BABY', 'TURBO', 'SPACE', 'ELON', 'ROCKET', 'BASED', 'CHAD', 'WOJAK', 'MUSK', 'ALPHA', 'DRAGON', 'FIRE', 'DUCK', 'FROG', 'ZERO'];
-		const suffixes = ['COIN', 'TOKEN', 'MOON', 'ROCKET', 'INU', 'SWAP', 'FI', 'CHAIN', 'DAO', 'VERSE', 'MUSK', 'LABS', 'X', 'DOGE', 'PEPE', 'CHAD', 'BANK', 'MONEY', 'GOLD'];
-		
-		// To create more varied and interesting tag names:
-		// 50% chance of prefix only, 40% chance of prefix+suffix, 10% chance of suffix only
-		const random = Math.random();
-		
-		if (random < 0.5) {
-			// Prefix only
-			return prefixes[Math.floor(Math.random() * prefixes.length)];
-		} else if (random < 0.9) {
-			// Prefix + suffix
-			const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-			const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-			return `${prefix}${suffix}`;
-		} else {
-			// Suffix only
-			return suffixes[Math.floor(Math.random() * suffixes.length)];
-		}
-	}
-	
-	/**
-	 * Update tag sizes based on token data
-	 * @param {Object} tokenData - Token data with market cap info
-	 */
-	updateTagSizes(tokenData) {
-		if (!tokenData || !tokenData.tokens) return;
-		
-		// Get the minimum and maximum market caps
-		let minMarketCap = Number.MAX_VALUE;
-		let maxMarketCap = 0;
-		
-		for (const token of tokenData.tokens) {
-			if (token.marketCap > 0) {
-				minMarketCap = Math.min(minMarketCap, token.marketCap);
-				maxMarketCap = Math.max(maxMarketCap, token.marketCap);
-			}
-		}
-		
-		// Update sizes for matching tags
-		for (const token of tokenData.tokens) {
-			const matchingTag = this.tags.find(tag => 
-				tag.originalName?.toLowerCase() === token.symbol.toLowerCase() ||
-				tag.name?.toLowerCase() === `$${token.symbol.toLowerCase()}`
-			);
+		// Update each tag's size
+		for (let i = 0; i < this.tags.length; i++) {
+			const tag = this.tags[i];
 			
-			if (matchingTag && token.marketCap > 0) {
-				// Calculate size based on market cap (logarithmic scale)
-				const minSize = 0.6; // Increased from 0.5 for better visibility
-				const maxSize = 1.2; // Reduced from 2.0 for more cohesive structure
-				
-				// Use logarithmic scale
-				const logMin = Math.log(minMarketCap);
-				const logMax = Math.log(maxMarketCap);
-				const logValue = Math.log(token.marketCap);
-				
-				// Normalize to 0-1 range
-				const normalizedValue = (logValue - logMin) / (logMax - logMin);
-				
-				// Calculate new size with a more compressed range
-				const newSize = minSize + (maxSize - minSize) * normalizedValue;
-				
-				// Resize tag using the new system
-				this.tagManager.resizeTag(matchingTag.id, newSize);
+			// Calculate age position (0 = oldest, 1 = newest)
+			const agePosition = i / Math.max(1, this.tags.length - 1);
+			
+			// Get original size from options or default to current size
+			const originalSize = tag.options?.scale || tag.mesh.scale.x;
+			
+			// Calculate new size based on age
+			const newSize = this.calculateSizeByAge(originalSize, agePosition);
+			
+			// Apply new size if significantly different
+			if (Math.abs(newSize - tag.mesh.scale.x) / tag.mesh.scale.x > 0.05) {
+				this.tagManager.resizeTag(tag.id, newSize);
 			}
 		}
 	}
 	
 	/**
-	 * Update the tag system (called once per frame)
-	 * @param {number} deltaTime - Time since last frame in seconds
-	 */
-	update(deltaTime) {
-		// Update tag manager
-		this.tagManager.update();
-		
-		// Update tag aging if needed
-		this.updateTagAging(deltaTime);
-		
-		// Update references (in case tags were added/removed)
-		this.tags = this.tagManager.tags;
-	}
-	
-	/**
-	 * Update tag aging (making older tags smaller and move inward)
-	 * @param {number} deltaTime - Time since last frame in seconds
-	 */
-	updateTagAging(deltaTime) {
-		// Only update every few seconds to reduce computation
-		const currentTime = Date.now();
-		const timeSinceLastUpdate = currentTime - this.lastAgeUpdateTime;
-		
-		// Reduced update interval from 5000ms to 3000ms for more responsive aging
-		if (timeSinceLastUpdate < 3000) return; // 3 seconds
-		
-		this.lastAgeUpdateTime = currentTime;
-		
-		// Update all tags
-		for (const tag of this.tags) {
-			if (!tag.mesh) continue;
-			
-			// Skip any tags that are still animating
-			if (tag.isAnimating) continue;
-			
-			// Calculate age as a 0-1 value (1 = newest, 0 = oldest)
-			const age = (currentTime - tag.creationTime) / 1000; // Age in seconds
-			
-			// More frequent aging effects 
-			// After initial 300 seconds (5 min), age more slowly
-			const agingThreshold = age < 300 ? 45 : 180; // seconds
-			
-			if (age > 0 && age % agingThreshold < 5) {
-				// Position in the aging queue (oldest first, newest last)
-				const agePosition = this.tags.indexOf(tag) / Math.max(1, this.tags.length - 1);
-				
-				// Calculate new size based on age position
-				const newSize = this.calculateSizeByAge(tag.options?.scale || tag.mesh.scale.x, agePosition);
-				
-				// Update tag size
-				if (Math.abs(tag.mesh.scale.x - newSize) > 0.01) {
-					this.tagManager.resizeTag(tag.id, newSize);
-				}
-			}
-		}
-	}
-	
-	/**
-	 * Calculate size based on age position (0 = oldest, 1 = newest)
+	 * Calculate tag size based on age
 	 * @param {number} originalSize - Original tag size
-	 * @param {number} agePosition - Age position from 0 (oldest) to 1 (newest)
-	 * @returns {number} New size
+	 * @param {number} agePosition - Age position (0-1, 0=oldest, 1=newest)
+	 * @returns {number} - New size
 	 */
 	calculateSizeByAge(originalSize, agePosition) {
-		// Older tags should be smaller but maintain minimum size for visibility
-		// For the oldest tag (agePosition = 0), size is reduced to 50% (up from 40%)
+		// Older tags should be smaller
+		// For the oldest tag (agePosition = 0), size is reduced to 40%
 		// For the newest tag (agePosition = 1), size stays at 100%
-		const minSizeFactor = 0.5; // Increased from 0.4 for better visibility
+		const minSizeFactor = 0.4;
 		const sizeFactor = minSizeFactor + (1 - minSizeFactor) * agePosition;
 		
 		// Calculate new size but don't go below minimum
-		return Math.max(0.3, originalSize * sizeFactor);
+		return Math.max(0.2, originalSize * sizeFactor);
+	}
+	
+	/**
+	 * Start demo mode
+	 * @param {Object} options - Demo options
+	 */
+	startDemo(options = {}) {
+		if (this.demoActive) return;
+		
+		// Configure demo
+		const demoConfig = {
+			interval: options.interval || 5000,
+			maxTags: options.maxTags || 20,
+			baseUrl: options.baseUrl || 'https://example.com/'
+		};
+		
+		// Start adding tags periodically
+		this.demoAddInterval = setInterval(() => {
+			// Check if we've reached max tags
+			if (this.tags.length >= demoConfig.maxTags) {
+				// Remove oldest tag
+				this.removeOldestTag();
+			}
+			
+			// Add a random tag
+			const randomIndex = Math.floor(Math.random() * this.demoTags.length);
+			const tagName = this.demoTags[randomIndex];
+			const tagSize = 0.5 + Math.random() * 1.5;
+			const tagUrl = `${demoConfig.baseUrl}${tagName.toLowerCase()}`;
+			
+			this.addTag(tagName, tagUrl, tagSize);
+			
+		}, demoConfig.interval);
+		
+		this.demoActive = true;
+	}
+	
+	/**
+	 * Stop demo mode
+	 */
+	stopDemo() {
+		if (this.demoAddInterval) {
+			clearInterval(this.demoAddInterval);
+			this.demoAddInterval = null;
+		}
+		
+		this.demoActive = false;
+	}
+	
+	/**
+	 * Generate a random tag (for demo mode)
+	 * @returns {Object} - Random tag with text, url, and size
+	 */
+	generateRandomTag() {
+		const prefixes = ['MOON', 'DOGE', 'SHIB', 'APE', 'FLOKI', 'PEPE'];
+		const suffixes = ['COIN', 'TOKEN', 'MOON', 'ROCKET', 'INU', 'SWAP'];
+		
+		const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+		const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+		const text = Math.random() > 0.5 ? `${prefix}${suffix}` : prefix;
+		const url = `https://example.com/${text.toLowerCase()}`;
+		const size = 0.5 + Math.random() * 0.8;
+		
+		return { text, url, size };
+	}
+	
+	/**
+	 * Update function called each frame
+	 */
+	update() {
+		// Update tag manager
+		this.tagManager.update();
+		
+		// Update tag sizes based on age
+		this.updateTagSizesByAge();
+	}
+	
+	/**
+	 * Get a tag by name
+	 * @param {string} name - Tag name
+	 * @returns {Object|null} - Tag or null
+	 */
+	getTagByName(name) {
+		return this.tagManager.getTagByName(name);
+	}
+	
+	/**
+	 * Clear all tags
+	 */
+	clearAllTags() {
+		// Make a copy of tag IDs since we'll be modifying the array
+		const tagIds = [...this.tags.map(tag => tag.id)];
+		
+		// Remove each tag
+		tagIds.forEach(id => this.removeTag(id));
+	}
+	
+	/**
+	 * Clean up resources
+	 */
+	dispose() {
+		// Stop demo if active
+		this.stopDemo();
+		
+		// Clear all tags
+		this.clearAllTags();
+		
+		// Dispose of tag manager
+		this.tagManager.dispose();
 	}
 } 
