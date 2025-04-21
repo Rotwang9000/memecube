@@ -128,7 +128,7 @@ export class VisualizationManager {
 		
 		// Update scoreboard with top tokens
 		if (this.tokenScoreboard && data.length > 0) {
-			this.tokenScoreboard.updateTokenData(data.slice(0, 5));
+			this.tokenScoreboard.updateTokenData(data.slice(0, 30));
 		}
 		
 		// Update token list if visible

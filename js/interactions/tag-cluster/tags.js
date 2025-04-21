@@ -41,9 +41,10 @@ export class TagsManager {
 	 * @param {string} text - Tag text (without $ prefix)
 	 * @param {string} url - URL to navigate to when clicked
 	 * @param {number} size - Size of the tag (0.5-2.0)
+	 * @param {Object} tokenData - Token data for the tag
 	 * @returns {Promise<Object|null>} - Created tag or null
 	 */
-	async addTag(text, url, size = null) {
+	async addTag(text, url, size = null, tokenData = null) {
 		// Ensure text doesn't have $ prefix (will be added by TagManager)
 		const tagText = text.startsWith('$') ? text.substring(1) : text;
 		
@@ -54,7 +55,7 @@ export class TagsManager {
 		const tag = this.tagManager.createTag(tagText, url, {
 			scale: finalSize,
 			size: 0.5 // Base text size before scaling
-		});
+		}, tokenData);
 		
 		// Update references
 		this.tags = this.tagManager.tags;
@@ -187,7 +188,10 @@ export class TagsManager {
 			const tagSize = 0.5 + Math.random() * 1.5;
 			const tagUrl = `${demoConfig.baseUrl}${tagName.toLowerCase()}`;
 			
-			this.addTag(tagName, tagUrl, tagSize);
+			// Generate demo token data
+			const tokenData = this.generateDemoTokenData(tagName);
+			
+			this.addTag(tagName, tagUrl, tagSize, tokenData);
 			
 		}, demoConfig.interval);
 		
@@ -204,6 +208,89 @@ export class TagsManager {
 		}
 		
 		this.demoActive = false;
+	}
+	
+	/**
+	 * Generate demo token data for a tag
+	 * @param {string} symbol - Token symbol
+	 * @returns {Object} - Demo token data
+	 */
+	generateDemoTokenData(symbol) {
+		// Generate random values for demo token
+		const priceUsd = (Math.random() * 100).toFixed(4);
+		const priceNative = (Math.random() * 0.05).toFixed(6);
+		const liquidityUsd = Math.floor(Math.random() * 5000000) + 100000;
+		const marketCap = Math.floor(Math.random() * 50000000) + 1000000;
+		const fdv = marketCap * (1 + Math.random());
+		const volume24h = liquidityUsd * (Math.random() * 2);
+		const priceChange24h = (Math.random() * 40) - 20; // -20% to +20%
+		
+		// Generate a random chain ID
+		const chains = ['eth', 'bsc', 'arbitrum', 'polygon', 'avalanche'];
+		const chainId = chains[Math.floor(Math.random() * chains.length)];
+		
+		// Generate an Ethereum-like address
+		const generateAddress = () => {
+			let address = '0x';
+			for (let i = 0; i < 40; i++) {
+				address += '0123456789abcdef'[Math.floor(Math.random() * 16)];
+			}
+			return address;
+		};
+		
+		// Create demo token data structure
+		return {
+			chainId,
+			dexId: ['uniswap', 'pancakeswap', 'sushiswap'][Math.floor(Math.random() * 3)],
+			url: `https://dexscreener.com/${chainId}/${generateAddress()}`,
+			pairAddress: generateAddress(),
+			baseToken: {
+				address: generateAddress(),
+				name: `${symbol} Token`,
+				symbol
+			},
+			quoteToken: {
+				address: generateAddress(),
+				name: Math.random() > 0.5 ? 'Ethereum' : 'USD Coin',
+				symbol: Math.random() > 0.5 ? 'ETH' : 'USDC'
+			},
+			priceNative,
+			priceUsd,
+			txns: {
+				h24: {
+					buys: Math.floor(Math.random() * 500) + 10,
+					sells: Math.floor(Math.random() * 400) + 5
+				}
+			},
+			volume: {
+				h24: volume24h
+			},
+			priceChange: {
+				h24: priceChange24h
+			},
+			liquidity: {
+				usd: liquidityUsd,
+				base: liquidityUsd / parseFloat(priceUsd),
+				quote: liquidityUsd * 0.5
+			},
+			fdv,
+			marketCap,
+			pairCreatedAt: Date.now() - Math.floor(Math.random() * 30) * 24 * 60 * 60 * 1000, // 0-30 days ago
+			info: {
+				imageUrl: `https://cryptologos.cc/logos/${symbol.toLowerCase()}-${symbol.toLowerCase()}-logo.png`,
+				websites: [
+					{ url: `https://${symbol.toLowerCase()}.io` }
+				],
+				socials: [
+					{ platform: 'twitter', handle: symbol.toLowerCase() },
+					{ platform: 'telegram', handle: symbol.toLowerCase() },
+					{ platform: 'discord', handle: symbol.toLowerCase() }
+				]
+			},
+			boosts: {
+				active: Math.random() > 0.5 ? 1 : 0
+			}
+		};
 	}
 	
 	/**

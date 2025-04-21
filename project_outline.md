@@ -15,7 +15,7 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
 - Interactive camera controls for viewers to navigate the 3D space
 - Click detection on text elements to open associated information in the scoreboard.
 - Demo mode with random tags appearing periodically
-- DexScreener API integration to display latest tokens sized by market cap
+- Multiple data sources integration (DexScreener, CoinGecko) to display latest tokens
 - Payment integration (future feature) to allow users to pay in SOL for larger text size
 
 ## Technical Structure
@@ -26,10 +26,10 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
 - `/js/interactions/tags.js` - Tag management, grid system, and animations
 - `/js/core/controls.js` - Camera and user interaction
 - `/js/utils/utils.js` - Utility functions
-- `/js/data-processors/` - Data processing modules for API integration
-  - `/js/data-processors/DataProcessor.js` - Generic data processor base class
-  - `/js/data-processors/DexScreenerProcessor.js` - DexScreener implementation
-  - `/js/data-processors/CoinGeckoProcessor.js` - Sample CoinGecko implementation
+- `/js/data-providers/` - Provider-agnostic data integration system
+  - `/js/data-providers/TokenDataProvider.js` - Base interface for all data providers
+  - `/js/data-providers/DexScreenerProvider.js` - DexScreener API implementation
+  - `/js/data-providers/CoinGeckoProvider.js` - CoinGecko API implementation
 - `/js/ui/DexScreenerManager.js` - UI management for token data
 - `/js/visualizations/` - 3D visualizations
   - `/js/visualizations/token-scoreboard.js` - LED scoreboard for token data
@@ -44,14 +44,14 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
 - Older tags naturally fill the inner spaces as the structure grows
 - Smooth animations for flying in, resizing,
 - Dynamic lighting to enhance 3D appearance
-- DexScreener API integration to fetch latest token profiles and market data
+- Provider-agnostic architecture for token data integration
 - Modal interface for displaying tokens with market cap-based sizing
 
 ## Technical Requirements
 - Three.js for 3D rendering
 - Modern JavaScript (ES6+)
 - Responsive design for various screen sizes 
-- DexScreener API for token data 
+- Support for multiple token data APIs
 
 ## Architecture
 
@@ -68,7 +68,7 @@ The application follows a modular architecture to allow for better maintainabili
 The system is designed to be provider-agnostic, separating data providers from visualizations:
 
 1. `TokenDataProvider` - Base interface for any data provider
-2. Specific implementations (like `DexScreenerProvider`) handle provider-specific logic
+2. Specific implementations (like `DexScreenerProvider` and `CoinGeckoProvider`) handle provider-specific logic
 3. `VisualizationManager` uses any `TokenDataProvider` to display data
 
 This architecture allows:
@@ -92,6 +92,7 @@ memecube/
 │   ├── 📁 data-providers/
 │   │   ├── TokenDataProvider.js
 │   │   ├── DexScreenerProvider.js
+│   │   ├── CoinGeckoProvider.js
 │   │   └── [...]
 │   ├── 📁 interactions/
 │   │   ├── 📁 tag-cluster/

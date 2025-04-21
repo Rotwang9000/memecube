@@ -8,7 +8,7 @@ export class DataProcessor {
 		this.data = [];
 		this.maxItemsToStore = 100;
 		this.lastFetchTime = 0;
-		this.fetchInterval = 60000; // 1 minute default
+		this.fetchInterval = 6000; // 6 seconds default
 		this.processingCallbacks = []; // Functions to call when data is processed
 		this.autoRefreshEnabled = false;
 		this.autoRefreshInterval = null;

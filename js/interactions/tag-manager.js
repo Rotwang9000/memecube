@@ -115,9 +115,10 @@ export class TagManager {
 	 * @param {string} name - Tag name (will add $ prefix if not present)
 	 * @param {string} url - URL to navigate to when clicked
 	 * @param {Object} options - Additional options for the tag
+	 * @param {Object} tokenData - Token data for scoreboard display
 	 * @returns {Object|null} - The created tag or null if creation failed
 	 */
-	createTag(name, url, options = {}) {
+	createTag(name, url, options = {}, tokenData = null) {
 		// Wait for font to load
 		if (!this.fontLoaded) {
 			console.warn('Font not loaded, cannot create tag');
@@ -128,6 +129,13 @@ export class TagManager {
 		if (typeof name !== 'string') {
 			console.error('Tag name must be a string');
 			return null;
+		}
+		
+		console.log(`Creating tag: ${name} with URL: ${url}`);
+		if (tokenData) {
+			console.log(`Tag has token data:`, tokenData);
+		} else {
+			console.log(`Tag has no token data`);
 		}
 		
 		// Format name (add $ prefix if not present)
@@ -179,7 +187,7 @@ export class TagManager {
 		
 		// Create material with physically based rendering
 		const material = new THREE.MeshStandardMaterial({
-			color: color,
+			color: options.color ? new THREE.Color(options.color) : color,
 			metalness: 0.9,  // Increased metalness for Borg-like appearance
 			roughness: 0.1,   // Reduced roughness for a polished look
 		});
@@ -201,10 +209,13 @@ export class TagManager {
 			originalName: name,
 			url: url || '#',
 			mesh,
-			color: color.clone(),
+			color: options.color ? new THREE.Color(options.color) : color.clone(),
 			createdAt: Date.now(),
-			options
+			options,
+			tokenData // Store token data for scoreboard display
 		};
+		
+		console.log(`Created tag with ID: ${id}, name: ${displayName}, hasTokenData: ${!!tokenData}`);
 		
 		// Add to collections
 		this.tags.push(tag);
@@ -291,18 +302,32 @@ export class TagManager {
 	 * @param {Object} tag - The tag that was clicked
 	 */
 	handleTagClick(tag) {
-		if (!tag || !tag.url) return;
+		if (!tag) {
+			console.warn('handleTagClick called with null tag');
+			return;
+		}
+		
+		console.log(`Tag clicked: ${tag.name} (ID: ${tag.id})`);
+		console.log(`Tag properties:`, {
+			id: tag.id,
+			name: tag.name,
+			originalName: tag.originalName,
+			url: tag.url,
+			hasTokenData: !!tag.tokenData
+		});
+		
+		// Update lastInteractionTime
+		tag.lastInteractionTime = Date.now();
 		
 		// Animate the tag (pulse)
 		this.pulseTag(tag);
 		
-		// Open the URL in a new tab
-		if (tag.url !== '#') {
-			window.open(tag.url, '_blank');
-		}
+		// Always display token information in scoreboard - never open URLs directly
+		console.log('Displaying token scoreboard for tag');
+		this.displayTokenScoreboard(tag);
 		
 		// Log click
-		console.log(`Tag clicked: ${tag.name}`);
+		console.log(`Tag click handling complete for ${tag.name}`);
 	}
 	
 	/**
@@ -368,7 +393,14 @@ export class TagManager {
 		if (intersects.length > 0) {
 			// Find which tag this mesh belongs to
 			const intersectedMesh = intersects[0].object;
-			return this.tags.find(tag => tag.mesh === intersectedMesh);
+			const tag = this.tags.find(tag => tag.mesh === intersectedMesh);
+			
+			// Update lastInteractionTime when a tag is hovered
+			if (tag) {
+				tag.lastInteractionTime = Date.now();
+			}
+			
+			return tag;
 		}
 		
 		return null;
@@ -481,5 +513,246 @@ export class TagManager {
 		this.physics.dispose();
 		
 		console.log('Tag manager disposed');
+	}
+	
+	/**
+	 * Display token information in a scoreboard
+	 * @param {Object} tag - The tag with token data
+	 */
+	displayTokenScoreboard(tag) {
+		if (!tag) return;
+		
+		console.log("Displaying token scoreboard for tag:", tag.name);
+		
+		// Use token data if available, or create minimal info from tag itself
+		const tokenData = tag.tokenData || this.createMinimalTokenData(tag);
+		console.log("Using token data:", tokenData);
+		
+		// Create or update scoreboard element
+		let scoreboard = document.getElementById('token-scoreboard');
+		if (!scoreboard) {
+			scoreboard = document.createElement('div');
+			scoreboard.id = 'token-scoreboard';
+			scoreboard.className = 'token-scoreboard';
+			document.body.appendChild(scoreboard);
+		}
+		
+		// Build the HTML content
+		let htmlContent = `
+			<div class="token-header">
+				<h2>${tokenData.baseToken?.symbol || tag.originalName || tag.name.replace('$', '') || 'Unknown'}</h2>
+				<button class="close-scoreboard">×</button>
+			</div>
+			<div class="token-price">
+				<div>Token: ${tag.name}</div>
+				<div>URL: <a href="${tag.url}" target="_blank">${tag.url}</a></div>
+			</div>
+		`;
+		
+		// Add token data if available
+		if (tokenData.priceUsd || tokenData.priceNative) {
+			htmlContent += `
+				<div class="token-metrics">
+					<div>Price: ${tokenData.priceUsd || 'N/A'}</div>
+					<div>Price (Native): ${tokenData.priceNative || 'N/A'}</div>
+				</div>
+			`;
+		}
+		
+		// Add token pair info
+		if (tokenData.baseToken?.symbol || tokenData.quoteToken?.symbol) {
+			htmlContent += `
+				<div class="token-pair">
+					<div>Pair: ${tokenData.baseToken?.symbol || 'Unknown'} / ${tokenData.quoteToken?.symbol || 'Unknown'}</div>
+					<div>DEX: ${tokenData.dexId || 'Unknown'}</div>
+					<div>Chain: ${tokenData.chainId || 'Unknown'}</div>
+				</div>
+			`;
+		}
+		
+		// Add metrics
+		if (tokenData.liquidity?.usd || tokenData.marketCap || tokenData.fdv) {
+			htmlContent += `
+				<div class="token-metrics">
+					${tokenData.liquidity?.usd ? `<div>Liquidity: $${tokenData.liquidity.usd.toLocaleString()}</div>` : ''}
+					${tokenData.marketCap ? `<div>Market Cap: $${tokenData.marketCap.toLocaleString()}</div>` : ''}
+					${tokenData.fdv ? `<div>FDV: $${tokenData.fdv.toLocaleString()}</div>` : ''}
+				</div>
+			`;
+		}
+		
+		// Basic info if nothing else is available
+		if (!tokenData.priceUsd && !tokenData.liquidity?.usd && !tokenData.marketCap) {
+			htmlContent += `
+				<div class="token-minimal-info">
+					<p>Limited information available for this token.</p>
+					<p>Added to MemeCube: ${new Date(tag.createdAt).toLocaleString()}</p>
+				</div>
+			`;
+		}
+		
+		// Set scoreboard content
+		scoreboard.innerHTML = htmlContent;
+		
+		// Add planets container
+		const planetsContainer = document.createElement('div');
+		planetsContainer.className = 'token-planets';
+		
+		// Always add the tag's URL as a planet
+		if (tag.url && tag.url !== '#') {
+			const planet = this.createPlanet('website', tag.url);
+			planetsContainer.appendChild(planet);
+		}
+		
+		// Add the planets container
+		scoreboard.appendChild(planetsContainer);
+		
+		// Show scoreboard
+		scoreboard.style.display = 'block';
+		
+		// Add event listener for close button
+		const closeButton = scoreboard.querySelector('.close-scoreboard');
+		if (closeButton) {
+			closeButton.addEventListener('click', () => {
+				scoreboard.style.display = 'none';
+			});
+		}
+		
+		// Add event listeners for planets
+		const planets = scoreboard.querySelectorAll('.planet');
+		planets.forEach(planet => {
+			planet.addEventListener('click', (e) => {
+				e.stopPropagation();
+				const url = planet.getAttribute('data-url');
+				if (url) {
+					window.open(url, '_blank');
+				}
+			});
+		});
+	}
+	
+	/**
+	 * Create a planet element for websites or socials
+	 * @param {string} type - Type of planet (website, twitter, telegram, etc.)
+	 * @param {string} url - URL to open when clicked
+	 * @returns {HTMLElement} - Planet element
+	 */
+	createPlanet(type, url) {
+		const planet = document.createElement('div');
+		planet.className = `planet planet-${type.toLowerCase()}`;
+		planet.setAttribute('data-url', url);
+		planet.setAttribute('title', type);
+		
+		// Add icon based on type
+		const icon = document.createElement('span');
+		icon.className = `planet-icon planet-icon-${type.toLowerCase()}`;
+		icon.innerHTML = this.getPlanetIcon(type);
+		planet.appendChild(icon);
+		
+		return planet;
+	}
+	
+	/**
+	 * Get icon for planet based on type
+	 * @param {string} type - Type of planet
+	 * @returns {string} - HTML for icon
+	 */
+	getPlanetIcon(type) {
+		// Simple icon mapping
+		const icons = {
+			website: '🌐',
+			twitter: '🐦',
+			telegram: '📱',
+			discord: '💬',
+			github: '🐙',
+			medium: '📝',
+			youtube: '📺',
+			facebook: '📘',
+			instagram: '📷',
+			reddit: '🔴',
+			default: '🪐'
+		};
+		
+		return icons[type.toLowerCase()] || icons.default;
+	}
+	
+	/**
+	 * Get social media URL based on platform and handle
+	 * @param {string} platform - Social media platform
+	 * @param {string} handle - User handle or ID
+	 * @returns {string} - URL to social media profile
+	 */
+	getSocialUrl(platform, handle) {
+		// Simple platform URL mapping
+		const platformUrls = {
+			twitter: `https://twitter.com/${handle}`,
+			telegram: `https://t.me/${handle}`,
+			discord: handle.startsWith('http') ? handle : `https://discord.gg/${handle}`,
+			github: `https://github.com/${handle}`,
+			medium: `https://medium.com/${handle}`,
+			youtube: `https://youtube.com/${handle}`,
+			facebook: `https://facebook.com/${handle}`,
+			instagram: `https://instagram.com/${handle}`,
+			reddit: `https://reddit.com/r/${handle}`
+		};
+		
+		return platformUrls[platform.toLowerCase()] || handle;
+	}
+	
+	/**
+	 * Get 24h volume from token data
+	 * @param {Object} tokenData - Token data
+	 * @returns {string} - Formatted 24h volume
+	 */
+	getVolume24h(tokenData) {
+		if (!tokenData.volume) return null;
+		
+		// Get first volume property (24h)
+		const volumes = Object.values(tokenData.volume);
+		if (volumes.length > 0) {
+			return `$${volumes[0].toLocaleString()}`;
+		}
+		
+		return null;
+	}
+	
+	/**
+	 * Get 24h price change from token data
+	 * @param {Object} tokenData - Token data
+	 * @returns {string} - Formatted 24h price change
+	 */
+	getPriceChange24h(tokenData) {
+		if (!tokenData.priceChange) return null;
+		
+		// Get first price change property (24h)
+		const changes = Object.values(tokenData.priceChange);
+		if (changes.length > 0) {
+			const change = changes[0];
+			const prefix = change >= 0 ? '+' : '';
+			return `${prefix}${change.toFixed(2)}%`;
+		}
+		
+		return null;
+	}
+	
+	/**
+	 * Create minimal token data from tag information
+	 * @param {Object} tag - The tag to create token data for
+	 * @returns {Object} - Minimal token data object
+	 */
+	createMinimalTokenData(tag) {
+		const symbol = tag.originalName || tag.name.replace('$', '');
+		return {
+			baseToken: {
+				symbol: symbol,
+				name: `${symbol} Token`
+			},
+			info: {
+				imageUrl: `https://cryptologos.cc/logos/${symbol.toLowerCase()}-${symbol.toLowerCase()}-logo.png`,
+				websites: [
+					{ url: tag.url }
+				]
+			}
+		};
 	}
 } 

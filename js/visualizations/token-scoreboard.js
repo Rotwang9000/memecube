@@ -12,7 +12,7 @@ export class TokenScoreboard {
 		this.camera = camera;
 		this.displayData = [];
 		this.isVisible = true;
-		this.expanded = false;
+		this.sizeMode = 'normal'; // Three modes: 'normal', 'tall', 'hidden'
 		this.updateInterval = 30000; // Update every 30 seconds
 		this.lastUpdateTime = 0;
 		this.isMoving = false;
@@ -28,14 +28,15 @@ export class TokenScoreboard {
 		
 		// Scoreboard dimensions (smaller size to fit better)
 		this.width = 15;
-		this.height = 8; // Increased height from 8 to 9 to prevent cut-off
+		this.height = 8; // Default height when normal
+		this.expandedHeight = 20; // Placeholder, will be computed dynamically
 		this.dotSize = 0.15;  // Size of each LED dot
 		this.dotSpacing = 0.2; // Spacing between dots
 		this.dotRows = 38;    // Number of dot rows
-		this.dotCols = 90;    // Number of dot columns
+		this.dotCols = 100;    // Number of dot columns
 		
 		// Token display settings
-		this.maxTokensToShow = 5;
+		this.maxTokensToShow = 30;
 		this.scrollSpeed = 0.5;  // How fast the display scrolls
 		this.scrollPosition = 0;
 		
@@ -66,8 +67,8 @@ export class TokenScoreboard {
 		this.createScoreboardStructure();
 		this.createLEDDisplay();
 		
-		// Create back button (initially hidden)
-		this.createBackButton();
+		// Create buttons for expand/collapse
+		this.createButtons();
 		
 		// Create corner jets
 		this.createCornerJets();
@@ -77,8 +78,28 @@ export class TokenScoreboard {
 		
 		console.log("Token scoreboard created");
 		// Update position initially
-		this.updateScreenPosition();
+		this._updateScreenPosition();
 		this.lastPosition.copy(this.scoreboardGroup.position);
+		
+		// Add event listener for window resize
+		window.addEventListener('resize', () => this.handleResize());
+	}
+	
+	/**
+	 * Handle window resize to reposition the scoreboard
+	 */
+	handleResize() {
+		console.log("Window resized, updating scoreboard position");
+		this._updateScreenPosition();
+	}
+	
+	/**
+	 * Update the scoreboard position to match the screen position
+	 * Public method that delegates to private _updateScreenPosition
+	 */
+	updateScreenPosition() {
+		
+		this._updateScreenPosition();
 	}
 	
 	/**
@@ -145,9 +166,9 @@ export class TokenScoreboard {
 		
 		const cornerPositions = [
 			[-this.width/2 - 0.1, this.height/2 + 0.1, 0],
-			[this.width/2 + 0.1, this.height/2 + 0.1, 0],
+			[this.width/2 + 2.1, this.height/2 + 0.1, 0],
 			[-this.width/2 - 0.1, -this.height/2 - 0.1, 0],
-			[this.width/2 + 0.1, -this.height/2 - 0.1, 0]
+			[this.width/2 + 2.1, -this.height/2 - 0.1, 0]
 		];
 		
 		cornerPositions.forEach(pos => {
@@ -160,47 +181,89 @@ export class TokenScoreboard {
 	}
 	
 	/**
-	 * Create back button for when scoreboard is expanded
+	 * Create visually attractive buttons with clear text
 	 */
-	createBackButton() {
-		const buttonMaterial = new THREE.MeshStandardMaterial({
-			color: 0x3366ff,
-			metalness: 0.7,
-			roughness: 0.3,
-			emissive: 0x001133,
-		});
+	createButtons() {
+		// Create expand button (up arrow - visible initially)
+		this.expandButton = new THREE.Group();
+		this.expandButton.position.set(-this.width/4, -this.height/2 - 1.2, 0.2);
+		this.expandButton.userData = { isButton: true, action: 'expand' };
+		this.expandButton.visible = true;
+		this.scoreboardGroup.add(this.expandButton);
 		
-		const buttonGeometry = new THREE.BoxGeometry(2, 0.6, 0.1);
-		this.backButton = new THREE.Mesh(buttonGeometry, buttonMaterial);
-		this.backButton.position.set(0, -this.height/2 - 0.8, 0);
-		this.backButton.visible = false; // Initially hidden
-		this.backButton.userData = { isButton: true, action: 'back' };
-		this.scoreboardGroup.add(this.backButton);
+		// Create collapse/back button (down arrow - visible initially)
+		this.collapseButton = new THREE.Group();
+		this.collapseButton.position.set(this.width/4, -this.height/2 - 1.2, 0.2);
+		this.collapseButton.userData = { isButton: true, action: 'collapse' };
+		this.collapseButton.visible = true;
+		this.scoreboardGroup.add(this.collapseButton);
 		
-		// Add text to button
-		const loader = new FontLoader();
-		loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
-			const textGeometry = new TextGeometry('BACK', {
-				font: font,
-				size: 0.3,
-				height: 0.05,
-				curveSegments: 3,
-				bevelEnabled: false
-			});
-			
-			textGeometry.computeBoundingBox();
-			const textWidth = textGeometry.boundingBox.max.x - textGeometry.boundingBox.min.x;
-			
-			const textMaterial = new THREE.MeshStandardMaterial({
-				color: 0xffffff,
-				emissive: 0xffffff,
-				emissiveIntensity: 0.5
-			});
-			
-			const textMesh = new THREE.Mesh(textGeometry, textMaterial);
-			textMesh.position.set(-textWidth/2, -0.15, 0.06);
-			this.backButton.add(textMesh);
+		// Create planet-like button graphics
+		const planetRadius = 0.5;
+		const planetGeometry = new THREE.SphereGeometry(planetRadius, 32, 32);
+		
+		// Expand button as a green planet with up arrow
+		this.expandPlanetMaterial = new THREE.MeshBasicMaterial({
+			color: 0x00aa00,
+			transparent: true,
+			opacity: 0.9
 		});
+		const expandPlanet = new THREE.Mesh(planetGeometry, this.expandPlanetMaterial);
+		this.expandButton.add(expandPlanet);
+		
+		// Collapse button as a red planet with down arrow
+		this.collapsePlanetMaterial = new THREE.MeshBasicMaterial({
+			color: 0xaa0000,
+			transparent: true,
+			opacity: 0.9
+		});
+		const collapsePlanet = new THREE.Mesh(planetGeometry, this.collapsePlanetMaterial);
+		this.collapseButton.add(collapsePlanet);
+		
+		// Add glowing ring around planets
+		const ringGeometry = new THREE.RingGeometry(planetRadius * 1.1, planetRadius * 1.3, 32);
+		const ringMaterial = new THREE.MeshBasicMaterial({
+			color: 0xaaaaaa,
+			transparent: true,
+			opacity: 0.5,
+			side: THREE.DoubleSide
+		});
+		const expandRing = new THREE.Mesh(ringGeometry, ringMaterial);
+		expandRing.rotation.x = Math.PI / 2;
+		expandRing.position.z = 0.1;
+		this.expandButton.add(expandRing);
+		
+		const collapseRing = new THREE.Mesh(ringGeometry, ringMaterial);
+		collapseRing.rotation.x = Math.PI / 2;
+		collapseRing.position.z = 0.1;
+		this.collapseButton.add(collapseRing);
+		
+		// Create arrow indicators on planets
+		this.createArrowIndicator(this.expandButton, 'up', 0xffffff);
+		this.createArrowIndicator(this.collapseButton, 'down', 0xffffff);
+		
+		console.log("Buttons created - Expand visible:", this.expandButton.visible, "Collapse visible:", this.collapseButton.visible);
+	}
+	
+	/**
+	 * Create arrow indicator on planet buttons
+	 */
+	createArrowIndicator(buttonGroup, direction, color) {
+		const arrowSize = 0.3;
+		const arrowGeometry = new THREE.BufferGeometry();
+		const positions = new Float32Array([
+			-arrowSize, 0, 0.1,
+			arrowSize, 0, 0.1,
+			0, direction === 'up' ? arrowSize * 1.5 : -arrowSize * 1.5, 0.1
+		]);
+		arrowGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+		const arrowMaterial = new THREE.MeshBasicMaterial({
+			color: color,
+			transparent: true,
+			opacity: 0.9
+		});
+		const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+		buttonGroup.add(arrow);
 	}
 	
 	/**
@@ -213,9 +276,9 @@ export class TokenScoreboard {
 		// Jet positions (4 corners)
 		const jetPositions = [
 			{ x: -this.width/2 - 0.2, y: this.height/2 + 0.2, z: 0 },
-			{ x: this.width/2 + 0.2, y: this.height/2 + 0.2, z: 0 },
+			{ x: this.width/2 + 2.2, y: this.height/2 + 0.2, z: 0 },
 			{ x: -this.width/2 - 0.2, y: -this.height/2 - 0.2, z: 0 },
-			{ x: this.width/2 + 0.2, y: -this.height/2 - 0.2, z: 0 }
+			{ x: this.width/2 + 2.2, y: -this.height/2 - 0.2, z: 0 }
 		];
 		
 		// Create each jet
@@ -364,8 +427,9 @@ export class TokenScoreboard {
 	/**
 	 * Activate jets when movement is detected
 	 * @param {THREE.Vector3} movement - Movement vector
+	 * @param {boolean} skipTopJets - Whether to skip the top jets (for tall mode)
 	 */
-	activateJets(movement) {
+	activateJets(movement, skipTopJets = false) {
 		// Ensure movement is a THREE.Vector3
 		const moveDir = movement instanceof THREE.Vector3 
 			? movement.clone().normalize() 
@@ -379,6 +443,11 @@ export class TokenScoreboard {
 		
 		// Go through each jet
 		this.jets.forEach((jet, index) => {
+			// Skip top jets if requested (used during tall mode transition)
+			if (skipTopJets && this.sizeMode === 'tall' && (index === 0 || index === 1)) {
+				return;
+			}
+			
 			const cornerVector = jet.basePosition.clone().normalize();
 			
 			// Determine jet activation based on direction
@@ -1063,25 +1132,21 @@ export class TokenScoreboard {
 		const changeText = changeChar + changeValue + '%';
 		
 		// Calculate the right-aligned position
-		const changeTextWidth = changeText.length * 6; // Approximate width of the text
-		const rightAlignedCol = this.dotCols - changeTextWidth - 8; // 2 spaces from the right edge
+		const changeTextWidth = changeText.length * 4; // Approximate width of the text
+		const rightAlignedCol = this.dotCols - changeTextWidth - 12; // 2 spaces from the right edge
 		
 		this.drawText(changeText, row + 6, rightAlignedCol, changeColor);
 	}
 	
-	updateScreenPosition() {
-		console.log("Updating screen position called");
-
-		// Clear existing timeout
-		clearTimeout(this.updateScreenPositionTimeout);
-		
-		// Reset motion flag if we're re-positioning
-		this.isMoving = false;
-		
-
-		this.updateScreenPositionTimeout = setTimeout(() => {
-			this._updateScreenPosition();
-		}, 1000);
+	/**
+	 * Compute the scoreboard height required to fill ~90% of the viewport vertically
+	 */
+	computeExpandedHeight() {
+		if (!this.camera) return this.expandedHeight || 20;
+		const fovRadians = this.camera.fov * Math.PI / 180;
+		const distance = 10; // Same distance used in _updateScreenPosition
+		const fullHeight = 2 * Math.tan(fovRadians / 2) * distance;
+		return fullHeight * 0.9; // Use 90% of visible height
 	}
 
 	/**
@@ -1094,22 +1159,31 @@ export class TokenScoreboard {
 		// Calculate the target position based on field of view
 		const fov = this.camera.fov * Math.PI / 180;
 		const distance = 10; // Fixed distance from camera
-		const height = 2 * Math.tan(fov / 2) * distance;
-		const width = height * this.camera.aspect;
+		const viewHeight = 2 * Math.tan(fov / 2) * distance;
+		const viewWidth = viewHeight * this.camera.aspect;
 		
 		// Get camera quaternion for orientation
-		const quaternion = this.camera.quaternion;
+		const quaternion = this.camera.quaternion.clone();
 		
 		// Create camera-oriented coordinate system
 		const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
 		const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
 		const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
 		
+		// Adjust screen position based on size mode
+		if (this.sizeMode === 'tall') {
+			// Center vertically in tall mode
+			this.screenPosition.y = 0; 
+		} else {
+			// Bottom left for normal and hidden modes
+			this.screenPosition.y = -0.7; 
+		}
+		
 		// Calculate target position relative to camera
 		const targetPos = this.camera.position.clone()
 			.add(forward.clone().multiplyScalar(distance))
-			.add(right.clone().multiplyScalar(this.screenPosition.x * width / 2))
-			.add(up.clone().multiplyScalar(this.screenPosition.y * height / 2));
+			.add(right.clone().multiplyScalar(this.screenPosition.x * viewWidth / 2))
+			.add(up.clone().multiplyScalar(this.screenPosition.y * viewHeight / 2));
 		
 		// Store target quaternion for rotation
 		const targetQuaternion = this.camera.quaternion.clone();
@@ -1122,8 +1196,8 @@ export class TokenScoreboard {
 			// Animate the movement
 			this.animateMovement(targetPos, targetQuaternion);
 			
-			// Activate jets when moving - ensure movement is safely passed as Vector3
-			this.activateJets(movement.clone());
+			// Only activate non-top jets during general scoreboard movement
+			this.activateJets(movement.clone(), true);
 			this.lastPosition.copy(this.scoreboardGroup.position);
 		} else {
 			// Just set position directly for small adjustments
@@ -1134,12 +1208,15 @@ export class TokenScoreboard {
 			
 			// Add a rotation to fix the upside-down text
 			this.scoreboardGroup.rotateZ(Math.PI);
-			this.scoreboardGroup.rotateY(Math.PI); // Rotate 180° to face the camera
+			this.scoreboardGroup.rotateY(Math.PI); // Face the camera
 			
-			// Set scale - smaller when not expanded
-			const scale = this.expanded ? 0.7 : 0.3;
+			// Keep consistent scale
+			const scale = 0.3;
 			this.scoreboardGroup.scale.set(scale, scale, scale);
 		}
+		
+		// Update visibility based on size mode
+		this.scoreboardGroup.visible = true; // Always visible, but may be faded in hidden mode
 	}
 	
 	/**
@@ -1169,6 +1246,15 @@ export class TokenScoreboard {
 		const jetStartTime = performance.now();
 		let lastJetTime = jetStartTime;
 		
+		// Animate top jets to top of window in tall mode
+		if (this.sizeMode === 'tall' && this.jets.length >= 2) {
+			const topJet1 = this.jets[0];
+			const topJet2 = this.jets[1];
+			const topHeight = this.height / 2 + 0.2;
+			topJet1.basePosition.y = topHeight;
+			topJet2.basePosition.y = topHeight;
+		}
+		
 		// Set up animation
 		const animate = (currentTime) => {
 			if (!this.isMoving) return;
@@ -1191,8 +1277,8 @@ export class TokenScoreboard {
 				t
 			);
 			
-			// Set scale - smaller when not expanded
-			const scale = this.expanded ? 0.7 : 0.3;
+			// Set scale - consistent scale
+			const scale = 0.3;
 			this.scoreboardGroup.scale.set(scale, scale, scale);
 			
 			// Continuously emit jet particles during flight
@@ -1203,7 +1289,7 @@ export class TokenScoreboard {
 					// More at beginning and end of animation
 					(progress < 0.3 || progress > 0.7) ? 0.02 : 0.01
 				);
-				this.activateJets(currentVelocity);
+				this.activateJets(currentVelocity, true);
 				lastJetTime = currentTime;
 			}
 			
@@ -1231,38 +1317,32 @@ export class TokenScoreboard {
 		if (intersects.length > 0) {
 			let obj = intersects[0].object;
 			
-			// Check if the object or its parent has button data
-			while (obj && !obj.userData?.isButton) {
-				obj = obj.parent;
+			// Traverse up to find button
+			let buttonGroup = obj;
+			while (buttonGroup && !buttonGroup.userData?.isButton) {
+				buttonGroup = buttonGroup.parent;
 			}
 			
-			if (obj?.userData?.isButton) {
-				if (obj.userData.action === 'back' && this.expanded) {
-					this.toggleExpanded();
-					return true;
-				}
+			if (buttonGroup?.userData?.isButton) {
+				const action = buttonGroup.userData.action;
+				console.log("Button clicked:", action);
 				
-				if (obj.userData.action === 'expand') {
-					// Get current camera position
-					const currentCameraPos = new THREE.Vector3();
-					currentCameraPos.copy(this.camera.position);
-					
-					// Get target position (slightly in front of scoreboard)
-					const targetPosition = new THREE.Vector3();
-					targetPosition.copy(this.scoreboardGroup.position);
-					
-					// Get direction from camera to scoreboard
-					const direction = new THREE.Vector3();
-					direction.subVectors(targetPosition, currentCameraPos).normalize();
-					
-					// Move camera position to be 8 units away from scoreboard in that direction
-					targetPosition.sub(direction.multiplyScalar(8));
-					
-					// Smoothly move camera
-					this.flyToPosition(this.camera, targetPosition, 1000);
-					
-					this.toggleExpanded();
-					return true;
+				if (action === 'expand') {
+					if (this.sizeMode === 'normal') {
+						this.changeSizeMode('tall');
+						return true;
+					} else if (this.sizeMode === 'hidden') {
+						this.changeSizeMode('normal');
+						return true;
+					}
+				} else if (action === 'collapse') {
+					if (this.sizeMode === 'tall') {
+						this.changeSizeMode('normal');
+						return true;
+					} else if (this.sizeMode === 'normal') {
+						this.changeSizeMode('hidden');
+						return true;
+					}
 				}
 			}
 		}
@@ -1271,57 +1351,290 @@ export class TokenScoreboard {
 	}
 	
 	/**
-	 * Fly the camera to a specified position
-	 * @param {THREE.Camera} camera - The camera to move
-	 * @param {THREE.Vector3} targetPosition - The position to fly to
-	 * @param {number} duration - Duration of flight in milliseconds
+	 * Change the size mode of the scoreboard
+	 * @param {string} mode - The new size mode ('normal', 'tall', 'hidden')
 	 */
-	flyToPosition(camera, targetPosition, duration) {
-		const startPosition = camera.position.clone();
-		const startTime = performance.now();
+	changeSizeMode(mode) {
+		const previousMode = this.sizeMode;
+		this.sizeMode = mode;
+		console.log("Changing scoreboard size mode from", previousMode, "to:", this.sizeMode);
 		
-		// Try to get controls to disable during animation
-		const controls = window.memeCube?.controls;
-		if (controls) {
-			controls.disableControls();
+		// Update button visibility and colors
+		if (this.sizeMode === 'tall') {
+			// Grey out up arrow as we're fully expanded
+			this.expandPlanetMaterial.color.setHex(0x555555);
+			this.collapsePlanetMaterial.color.setHex(0xaa0000); // Active down arrow
+		} else if (this.sizeMode === 'normal') {
+			// Both buttons active
+			this.expandPlanetMaterial.color.setHex(0x00aa00);
+			this.collapsePlanetMaterial.color.setHex(0xaa0000);
+		} else if (this.sizeMode === 'hidden') {
+			// Grey out down arrow as we're fully hidden
+			this.expandPlanetMaterial.color.setHex(0x00aa00); // Active up arrow
+			this.collapsePlanetMaterial.color.setHex(0x555555);
 		}
 		
-		const animate = (currentTime) => {
-			const elapsed = currentTime - startTime;
+		// Animate the top jets for the tall mode - do this BEFORE changing height
+		if ((this.sizeMode === 'tall' || previousMode === 'tall') && this.jets.length >= 4) {
+			// Only move the top jets (index 0 and 1) to the top of the window
+			this.animateTopJetsToWindowTop();
+		}
+		
+		// Update height based on mode - AFTER we've started the jet animation
+		if (this.sizeMode === 'tall') {
+			this.height = this.computeExpandedHeight();
+			console.log("Expanded height computed as:", this.height);
+		} else if (this.sizeMode === 'normal') {
+			this.height = 8;
+		} else if (this.sizeMode === 'hidden') {
+			this.height = 8; // Keep same size, but will be faded out
+		}
+		
+		// Make opacity changes for hidden mode
+		if (this.sizeMode === 'hidden') {
+			// Fade out the scoreboard
+			this.scoreboardGroup.traverse(obj => {
+				if (obj.material && obj.material.opacity !== undefined) {
+					obj.material.transparent = true;
+					// Preserve original opacity or create a new one
+					if (obj.userData.originalOpacity === undefined) {
+						obj.userData.originalOpacity = obj.material.opacity;
+					}
+					obj.material.opacity = obj.userData.originalOpacity * 0.3;
+				}
+			});
+		} else {
+			// Restore original opacity
+			this.scoreboardGroup.traverse(obj => {
+				if (obj.material && obj.material.opacity !== undefined && obj.userData.originalOpacity !== undefined) {
+					obj.material.opacity = obj.userData.originalOpacity;
+				}
+			});
+		}
+		
+		// Update dimensions (frame, background, LED rows, jets, etc.)
+		this.updateScoreboardDimensions();
+		
+		// Update display dot placement
+		this.updateLEDDisplaySize();
+		
+		// Re-position the scoreboard in screen space
+		this._updateScreenPosition();
+	}
+	
+	/**
+	 * Animate the top jets to fly to the top of the window when expanding
+	 */
+	animateTopJetsToWindowTop() {
+		// Only the top jets need to move
+		const topLeftJet = this.jets[0];
+		const topRightJet = this.jets[1];
+		
+		// Make sure we have the jets
+		if (!topLeftJet || !topRightJet) {
+			console.error("Top jets not found for animation");
+			return;
+		}
+		
+		// Original positions to store for return journey
+		if (!topLeftJet.userData) topLeftJet.userData = {};
+		if (!topRightJet.userData) topRightJet.userData = {};
+		
+		// Store original positions if not already stored
+		if (!topLeftJet.userData.originalY) {
+			console.log("Storing original jet positions");
+			topLeftJet.userData.originalY = topLeftJet.basePosition.y;
+			topRightJet.userData.originalY = topRightJet.basePosition.y;
+			topLeftJet.userData.originalX = topLeftJet.basePosition.x;
+			topRightJet.userData.originalX = topRightJet.basePosition.x;
+		}
+		
+		// Calculate view height to position jets at top edge
+		const fov = this.camera.fov * Math.PI / 180;
+		const distance = 10;
+		const viewHeight = 2 * Math.tan(fov / 2) * distance;
+		const viewWidth = viewHeight * this.camera.aspect;
+		
+		// Calculate target positions for a dramatic spread at the top
+		// Target Y position for top jets (near top of screen)
+		const topYPosition = viewHeight * 0.45; // Near top of screen
+		
+		// For X, keep the spacing proportional to screen width
+		const leftXPosition = -viewWidth * 0.35; // Left side
+		const rightXPosition = viewWidth * 0.35; // Right side
+		
+		// Animation duration
+		const duration = 1200; // 1.2 seconds for a more dramatic effect
+		const startTime = performance.now();
+		
+		// Starting positions
+		const startY1 = topLeftJet.basePosition.y;
+		const startY2 = topRightJet.basePosition.y;
+		const startX1 = topLeftJet.basePosition.x;
+		const startX2 = topRightJet.basePosition.x;
+		
+		// Target positions depend on the mode we're changing to
+		const isTallMode = this.sizeMode === 'tall';
+		
+		// Target Y positions - either fly to top or return to original
+		const targetY1 = isTallMode ? topYPosition : topLeftJet.userData.originalY;
+		const targetY2 = isTallMode ? topYPosition : topRightJet.userData.originalY;
+		
+		// Target X positions - spread wider at top or return to original
+		const targetX1 = isTallMode ? leftXPosition : topLeftJet.userData.originalX;
+		const targetX2 = isTallMode ? rightXPosition : topRightJet.userData.originalX;
+		
+		console.log("Animating top jets from", startY1, "to", targetY1);
+		
+		// Create a more dramatic fly effect
+		const animate = (timestamp) => {
+			const elapsed = timestamp - startTime;
 			const progress = Math.min(elapsed / duration, 1);
 			
-			// Use ease-in-out function for smoother movement
-			const t = progress < 0.5
-				? 2 * progress * progress
-				: 1 - Math.pow(-2 * progress + 2, 2) / 2;
+			// Use an easing function for smoother animation
+			const easedProgress = this.easeInOutQuad(progress);
 			
-			// Interpolate position
-			camera.position.lerpVectors(startPosition, targetPosition, t);
+			// Update jet positions - both Y and X for a more dramatic effect
+			topLeftJet.basePosition.y = startY1 + (targetY1 - startY1) * easedProgress;
+			topRightJet.basePosition.y = startY2 + (targetY2 - startY2) * easedProgress;
 			
-			// Make sure camera is looking at the scoreboard
-			camera.lookAt(this.scoreboardGroup.position);
+			// If going to tall mode, also animate X positions for a wider spread
+			if (isTallMode || this.sizeMode === 'normal') {
+				topLeftJet.basePosition.x = startX1 + (targetX1 - startX1) * easedProgress;
+				topRightJet.basePosition.x = startX2 + (targetX2 - startX2) * easedProgress;
+			}
+			
+			// Emit particles to create a trail effect
+			const dirY = isTallMode ? 1 : -1; // Up for tall, down for normal
+			this.emitJetTrail(topLeftJet, new THREE.Vector3(isTallMode ? -0.5 : 0, dirY, 0));
+			this.emitJetTrail(topRightJet, new THREE.Vector3(isTallMode ? 0.5 : 0, dirY, 0));
 			
 			// Continue animation if not complete
 			if (progress < 1) {
 				requestAnimationFrame(animate);
 			} else {
-				// Re-enable controls when animation is complete
-				if (controls) {
-					controls.enableControls();
+				// When animation finishes, update bottom jets positions if in tall mode
+				if (isTallMode && this.jets.length >= 4) {
+					// Update bottom jets to stay at bottom of expanded scoreboard
+					const bottomLeftJet = this.jets[2];
+					const bottomRightJet = this.jets[3];
+					
+					if (bottomLeftJet && bottomRightJet) {
+						// Store original positions if needed
+						if (!bottomLeftJet.userData) bottomLeftJet.userData = {};
+						if (!bottomRightJet.userData) bottomRightJet.userData = {};
+						
+						if (!bottomLeftJet.userData.originalY) {
+							bottomLeftJet.userData.originalY = bottomLeftJet.basePosition.y;
+							bottomRightJet.userData.originalY = bottomRightJet.basePosition.y;
+						}
+						
+						// Position at bottom of expanded scoreboard
+						bottomLeftJet.basePosition.y = -this.height/2 - 0.2;
+						bottomRightJet.basePosition.y = -this.height/2 - 0.2;
+					}
 				}
 			}
 		};
 		
+		// Start animation
 		requestAnimationFrame(animate);
 	}
 	
 	/**
-	 * Toggle expanded state
+	 * Emit a trail of particles from a jet during movement
 	 */
-	toggleExpanded() {
-		this.expanded = !this.expanded;
-		this.backButton.visible = this.expanded;
-		return this.expanded;
+	emitJetTrail(jet, direction) {
+		// Emit multiple particles for a richer effect
+		for (let i = 0; i < 3; i++) {
+			this.emitJetParticle(jet, direction, 1.5);
+		}
+	}
+	
+	/**
+	 * Easing function for smoother animations
+	 */
+	easeInOutQuad(t) {
+		return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+	}
+	
+	/**
+	 * Update scoreboard dimensions based on current height / state
+	 */
+	updateScoreboardDimensions() {
+		console.log("Updating scoreboard height to:", this.height);
+		
+		// Update frame geometry
+		const frame = this.scoreboardGroup.children.find(child => child.geometry instanceof THREE.BoxGeometry);
+		if (frame) {
+			frame.geometry = new THREE.BoxGeometry(this.width + 0.5, this.height + 0.5, 0.3);
+		}
+		
+		// Update display background
+		const display = this.scoreboardGroup.children.find(child => child.geometry instanceof THREE.BoxGeometry && child !== frame);
+		if (display) {
+			display.geometry = new THREE.BoxGeometry(this.width, this.height * 1.1, 0.1);
+		}
+		
+		// Update back panel
+		const backPanel = this.scoreboardGroup.children.find(child => child.geometry instanceof THREE.PlaneGeometry);
+		if (backPanel) {
+			backPanel.geometry = new THREE.PlaneGeometry(this.width + 0.5, this.height + 0.5);
+		}
+		
+		// Update button positions
+		this.expandButton.position.set(-this.width/4, -this.height/2 - 1.2, 0.2);
+		this.collapseButton.position.set(this.width/4, -this.height/2 - 1.2, 0.2);
+		
+		// Dynamically calculate dot rows to fill the available height while keeping spacing constant
+		const baseSpacing = (this.width * 0.98 / this.dotCols) * 1.3; // Width-limited spacing (constant)
+		this.dotRows = Math.max(1, Math.floor((this.height * 0.95) / baseSpacing));
+		console.log("Dot rows recalculated:", this.dotRows);
+		
+		// Re-create LED display to match new row count
+		if (this.ledGroup) {
+			this.scoreboardGroup.remove(this.ledGroup);
+			this.ledGroup.traverse(obj => {
+				if (obj.geometry) obj.geometry.dispose?.();
+				if (obj.material) obj.material.dispose?.();
+			});
+			this.ledGroup = null;
+		}
+		this.createLEDDisplay();
+	}
+	
+	/**
+	 * Update LED display size based on current height
+	 */
+	updateLEDDisplaySize() {
+		if (!this.ledGroup) return;
+		
+		// Recalculate the total height for LED placement
+		const totalHeight = this.height * 0.95;
+		
+		// Adjust dot spacing to fill the display area
+		const adjustedDotSpacing = Math.min(
+			this.width * 0.98 / this.dotCols,
+			totalHeight / this.dotRows
+		) * 1.3;
+		
+		// Calculate start positions to center the display
+		const startX = -(this.width * 0.98) / 2 + adjustedDotSpacing / 2;
+		const startY = -totalHeight / 2 + adjustedDotSpacing / 2;
+		
+		// Update dot positions based on new height
+		for (let row = 0; row < this.dotRows; row++) {
+			for (let col = 0; col < this.dotCols; col++) {
+				const dot = this.dots[row][col];
+				if (dot) {
+					dot.position.x = startX + col * adjustedDotSpacing;
+					dot.position.y = startY + row * adjustedDotSpacing;
+				}
+			}
+		}
+		
+		// Center the LED group in the scoreboard
+		this.ledGroup.position.set(0, 0, 0);
 	}
 	
 	/**
@@ -1337,11 +1650,6 @@ export class TokenScoreboard {
 	 */
 	update(deltaTime) {
 		if (!this.isVisible) return;
-		
-		// Update screen position to follow camera if not already animating
-		// if (!this.isMoving) {
-		// 	this.updateScreenPosition();
-		// }
 		
 		// Force more consistent fading by always updating jets
 		this.jets.forEach(jet => {
@@ -1377,9 +1685,40 @@ export class TokenScoreboard {
 			return;
 		}
 		
-		// Draw each token's info with increased vertical spacing between tokens
-		for (let i = 0; i < Math.min(this.displayData.length, 5); i++) {
-			this.drawTokenInfo(i, i * 12);
+		// Calculate total content height (in rows)
+		const totalContentHeight = this.displayData.length * 12; // Each token takes 12 rows
+		const scrollGap = 10; // Gap in rows before content loops again
+		const totalScrollHeight = totalContentHeight + scrollGap;
+		
+		// Check if content exceeds display height
+		if (totalContentHeight > this.dotRows) {
+			// Update scroll position for vertical scrolling
+			this.scrollPosition += this.scrollSpeed * deltaTime * 60; // Adjust speed based on deltaTime
+			
+			// Reset scroll position to loop content after gap
+			if (this.scrollPosition >= totalScrollHeight) {
+				this.scrollPosition = 0;
+			}
+			
+			// Draw tokens with vertical offset based on scroll position
+			for (let i = 0; i < this.displayData.length; i++) {
+				let rowOffset = i * 12 - Math.floor(this.scrollPosition);
+				if (rowOffset < -12) {
+					// If the token is above the visible area, try to wrap it to the bottom after the gap
+					rowOffset += totalScrollHeight;
+				}
+				if (rowOffset >= -12 && rowOffset < this.dotRows) {
+					this.drawTokenInfo(i, rowOffset);
+				}
+			}
+		} else {
+			// Draw all tokens dynamically based on available space
+			const tokenSpacing = Math.floor(this.dotRows / this.displayData.length);
+			for (let i = 0; i < this.displayData.length; i++) {
+				if (i * tokenSpacing < this.dotRows) {
+					this.drawTokenInfo(i, i * tokenSpacing);
+				}
+			}
 		}
 	}
 } 

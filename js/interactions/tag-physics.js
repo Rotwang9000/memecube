@@ -17,11 +17,11 @@ export class TagPhysics {
         this.options = {
             cubeSize: options.initialCubeSize || 10, // Initial cube size - will adjust dynamically
             spacing: 0.005,             // Reduced to hair's width spacing between tags
-            centralForce: 0.08,        // Increased force pulling tags toward center
-            surfaceForce: 0.05,        // Reduced force to allow closer packing
-            damping: 0.85,             // Slightly reduced damping for more responsive movement
-            maxSpeed: 0.3,             // Reduced max speed for controlled movement
-            collisionForce: 0.3,       // Increased collision force for tighter packing
+            centralForce: 0.18,        // Increased force pulling tags toward center
+            surfaceForce: 1.005,        // Reduced force to allow closer packing
+            damping: 0.5,             // Slightly reduced damping for more responsive movement
+            maxSpeed: 1.6,             // Reduced max speed for controlled movement
+            collisionForce: 0.1,       // Increased collision force for tighter packing
             faceBalanceFactor: 0.5,    // Factor for balancing tags across faces
             flipAnimationDuration: 1000, // Duration in ms for flip to face animation
             ...options
@@ -384,7 +384,7 @@ export class TagPhysics {
      */
     update() {
         const now = Date.now();
-        const deltaTime = Math.min(now - this.lastUpdateTime, 100); // Cap delta time to prevent large jumps
+        const deltaTime = Math.min(now - this.lastUpdateTime, 33); // Cap delta time to approx. one frame (33ms)
         this.lastUpdateTime = now;
 
         // Skip physics update if document is not visible
@@ -428,10 +428,20 @@ export class TagPhysics {
             );
             physicsData.force.add(jiggle);
 
+            // Calculate normalized deltaTime to make physics consistent regardless of frame rate
+            // 16.67ms is approximately 60fps
+            const normalizedDeltaTime = deltaTime / 16.67;
+            
             // Update velocity with damping (reduced for smaller tags to prevent bouncing)
-            physicsData.velocity.add(physicsData.force.divideScalar(physicsData.mass));
-            const dampingFactor = physicsData.mass > 2.0 ? this.options.damping : this.options.damping * 1.2; // Smaller tags damp more
+            // Scale force by normalized deltaTime for consistent physics
+            physicsData.velocity.add(physicsData.force.clone().divideScalar(physicsData.mass).multiplyScalar(normalizedDeltaTime));
+            const dampingFactor = Math.pow(physicsData.mass > 2.0 ? this.options.damping : this.options.damping * 1.2, normalizedDeltaTime); // Smaller tags damp more
             physicsData.velocity.multiplyScalar(dampingFactor);
+
+            // Apply additional damping after inactivity to stabilize positions
+            if (now - tag.lastInteractionTime > 5000) { // 5 seconds of no user interaction
+                physicsData.velocity.multiplyScalar(0.95); // Additional damping
+            }
 
             // Limit speed
             if (physicsData.velocity.length() > this.options.maxSpeed) {
@@ -439,21 +449,29 @@ export class TagPhysics {
             }
 
             // Constrain movement to up/down relative to tag orientation only after initial fly-in
-            const constrainedVelocity = tag.createdAt && Date.now() - tag.createdAt > 5000 ? 
+            const constrainedVelocity = tag.createdAt && Date.now() - tag.createdAt > 8000 ? 
                 this.constrainVelocity(tag, physicsData.velocity) : physicsData.velocity;
 
-            // Update position
-            tag.mesh.position.add(constrainedVelocity);
+            // Update position - scale by normalized deltaTime for consistent movement
+            const positionDelta = constrainedVelocity.clone().multiplyScalar(normalizedDeltaTime);
+            tag.mesh.position.add(positionDelta);
             physicsData.isMoving = constrainedVelocity.length() > 0.01;
 
-            // Animate flip to face-based orientation after fly-in period
-            if (tag.createdAt && Date.now() - tag.createdAt > 5000 && tag.originalRotation) {
-                const elapsedSinceFlipStart = Date.now() - (tag.flipStartTime || tag.createdAt + 5000);
+            // Determine if tag has settled in the cluster based on low velocity
+            const isSettled = constrainedVelocity.length() < 0.05;
+            const minimumFlightTime = 2000; // Minimum time before considering flip (2 seconds)
+            const hasFlownEnough = tag.createdAt && (Date.now() - tag.createdAt) > minimumFlightTime;
+
+            // Animate flip to face-based orientation after tag has settled into the cluster
+            if (hasFlownEnough && isSettled && tag.originalRotation && !tag.flipStartTime) {
+                tag.flipStartTime = Date.now();
+                tag.startQuaternion = tag.mesh.quaternion.clone();
+            }
+            
+            // Progress the flip animation if it has started
+            if (tag.flipStartTime) {
+                const elapsedSinceFlipStart = Date.now() - tag.flipStartTime;
                 if (elapsedSinceFlipStart < this.options.flipAnimationDuration) {
-                    if (!tag.flipStartTime) {
-                        tag.flipStartTime = Date.now();
-                        tag.startQuaternion = tag.mesh.quaternion.clone();
-                    }
                     const progress = elapsedSinceFlipStart / this.options.flipAnimationDuration;
                     const targetQuaternion = new THREE.Quaternion().setFromEuler(tag.originalRotation);
                     tag.mesh.quaternion.slerpQuaternions(tag.startQuaternion, targetQuaternion, progress);
@@ -621,9 +639,25 @@ export class TagPhysics {
      * Handle document visibility change to pause physics when tab is inactive
      */
     handleVisibilityChange() {
+        const wasVisible = this.isDocumentVisible;
         this.isDocumentVisible = document.visibilityState === 'visible';
+        
         if (this.isDocumentVisible) {
-            this.lastUpdateTime = Date.now(); // Reset time to prevent large delta
+            // When becoming visible again, reset time to prevent large delta time
+            this.lastUpdateTime = Date.now();
+            
+            // If we were previously not visible, reset collision state
+            if (!wasVisible) {
+                this.collisionChains.clear();
+                
+                // Apply a very small update to stabilize positions
+                for (const [tagId, physicsData] of this.tags) {
+                    // Reduce any existing velocity to prevent jumps
+                    if (physicsData.velocity) {
+                        physicsData.velocity.multiplyScalar(0.1);
+                    }
+                }
+            }
         }
     }
 } 

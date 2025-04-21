@@ -1,0 +1,198 @@
+/* Token Scoreboard Styles */
+.token-scoreboard {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 400px;
+	max-width: 90vw;
+	max-height: 80vh;
+	background-color: rgba(10, 10, 20, 0.95);
+	color: #fff;
+	border-radius: 10px;
+	padding: 20px;
+	box-shadow: 0 0 20px rgba(0, 0, 0, 0.8), 0 0 40px rgba(100, 100, 255, 0.4);
+	z-index: 1000;
+	display: none;
+	overflow-y: auto;
+	backdrop-filter: blur(5px);
+	border: 1px solid rgba(100, 100, 255, 0.3);
+	font-family: 'Consolas', monospace;
+}
+
+.token-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 15px;
+	border-bottom: 1px solid rgba(100, 100, 255, 0.3);
+	padding-bottom: 10px;
+}
+
+.token-header h2 {
+	margin: 0;
+	color: #00ccff;
+	text-shadow: 0 0 10px rgba(0, 200, 255, 0.5);
+	font-size: 24px;
+}
+
+.token-header img {
+	width: 40px;
+	height: 40px;
+	border-radius: 50%;
+	object-fit: cover;
+	margin-right: 20px;
+	border: 2px solid rgba(100, 100, 255, 0.5);
+}
+
+.close-scoreboard {
+	background: none;
+	border: none;
+	color: #fff;
+	font-size: 24px;
+	cursor: pointer;
+	opacity: 0.7;
+	transition: opacity 0.2s;
+}
+
+.close-scoreboard:hover {
+	opacity: 1;
+}
+
+.token-price, .token-metrics, .token-pair, .token-volume, .token-minimal-info {
+	margin-bottom: 15px;
+	padding: 10px;
+	background-color: rgba(100, 100, 255, 0.1);
+	border-radius: 5px;
+}
+
+.token-minimal-info {
+	text-align: center;
+	font-style: italic;
+	background-color: rgba(255, 255, 100, 0.1);
+}
+
+.token-minimal-info p {
+	margin: 5px 0;
+}
+
+.token-planets {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 15px;
+	margin-top: 20px;
+	justify-content: center;
+	padding: 10px;
+	background-color: rgba(100, 100, 255, 0.05);
+	border-radius: 5px;
+}
+
+/* Planet Styles */
+.planet {
+	position: relative;
+	width: 40px;
+	height: 40px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	transition: all 0.3s ease;
+	background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.4), transparent);
+	box-shadow: 0 0 10px rgba(100, 100, 255, 0.5);
+}
+
+.planet::before {
+	content: '';
+	position: absolute;
+	top: -3px;
+	left: -3px;
+	right: -3px;
+	bottom: -3px;
+	border-radius: 50%;
+	background: linear-gradient(45deg, #00ccff, #ff00cc);
+	z-index: -1;
+	opacity: 0.7;
+	animation: rotate 10s linear infinite;
+}
+
+.planet:hover {
+	transform: scale(1.2);
+	box-shadow: 0 0 15px rgba(100, 200, 255, 0.8);
+}
+
+.planet-icon {
+	font-size: 20px;
+}
+
+/* Individual planet types */
+.planet-website {
+	background-color: rgba(0, 200, 255, 0.5);
+}
+
+.planet-twitter {
+	background-color: rgba(29, 161, 242, 0.5);
+}
+
+.planet-telegram {
+	background-color: rgba(0, 136, 204, 0.5);
+}
+
+.planet-discord {
+	background-color: rgba(114, 137, 218, 0.5);
+}
+
+.planet-github {
+	background-color: rgba(36, 41, 46, 0.5);
+}
+
+.planet-medium {
+	background-color: rgba(0, 0, 0, 0.5);
+}
+
+.planet-youtube {
+	background-color: rgba(255, 0, 0, 0.5);
+}
+
+.planet-facebook {
+	background-color: rgba(66, 103, 178, 0.5);
+}
+
+.planet-instagram {
+	background-color: rgba(225, 48, 108, 0.5);
+}
+
+.planet-reddit {
+	background-color: rgba(255, 69, 0, 0.5);
+}
+
+/* Animations */
+@keyframes rotate {
+	0% {
+		transform: rotate(0deg);
+	}
+	100% {
+		transform: rotate(360deg);
+	}
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+	.token-scoreboard {
+		width: 90vw;
+		max-height: 80vh;
+	}
+	
+	.token-header h2 {
+		font-size: 20px;
+	}
+	
+	.token-planets {
+		gap: 10px;
+	}
+	
+	.planet {
+		width: 35px;
+		height: 35px;
+	}
+} 

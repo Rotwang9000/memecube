@@ -15,7 +15,9 @@ This directory contains the data provider system that powers MemeCube's visualiz
 - Auto-refresh capabilities
 - Common utility methods for token visualizations
 
-### DexScreenerProvider
+### Specific Provider Implementations
+
+#### DexScreenerProvider
 
 `DexScreenerProvider.js` implements the TokenDataProvider interface for the DexScreener API. It handles:
 
@@ -23,6 +25,14 @@ This directory contains the data provider system that powers MemeCube's visualiz
 - Processing and normalizing the data
 - Calculating token sizes based on market cap
 - Formatting market cap values for display
+
+#### CoinGeckoProvider
+
+`CoinGeckoProvider.js` implements the TokenDataProvider interface for the CoinGecko API. It offers:
+
+- Access to market data for thousands of cryptocurrencies 
+- Support for price history, market caps, and volume
+- Integration with the same visualization system as other providers
 
 ## Adding a New Provider
 
@@ -39,21 +49,21 @@ Example:
 import { TokenDataProvider } from './TokenDataProvider.js';
 
 export class MyCustomProvider extends TokenDataProvider {
-    constructor() {
-        super();
-        // Your initialization code here
-    }
-    
-    // Implement all required methods
-    async refreshData() {
-        // Your implementation
-    }
-    
-    async getTopTokens(limit = 10) {
-        // Your implementation
-    }
-    
-    // ... other required methods
+	constructor() {
+		super();
+		// Your initialization code here
+	}
+	
+	// Implement all required methods
+	async refreshData() {
+		// Your implementation
+	}
+	
+	async getTopTokens(limit = 10) {
+		// Your implementation
+	}
+	
+	// ... other required methods
 }
 ```
 
@@ -65,18 +75,26 @@ The system supports switching between providers at runtime:
 // Initialize with one provider
 const dexScreenerProvider = new DexScreenerProvider();
 const visualizationManager = new VisualizationManager(
-    scene, 
-    camera, 
-    tagsManager, 
-    dexScreenerProvider
+	scene, 
+	camera, 
+	tagsManager, 
+	dexScreenerProvider
 );
 
 // Later, switch to a different provider
-const newProvider = new AnotherProvider();
-visualizationManager.setDataProvider(newProvider);
+const coingeckoProvider = new CoinGeckoProvider();
+visualizationManager.setDataProvider(coingeckoProvider);
 ```
 
-## Benefits of Provider-Agnostic Architecture
+## Provider-Agnostic Design
+
+The MemeCube application is designed to be completely provider-agnostic:
+
+1. The visualization system only depends on the TokenDataProvider interface
+2. Data processing logic is encapsulated within each provider implementation
+3. UI components consume standardized data formats regardless of source
+
+This design allows for:
 
 1. **Decoupling** - Data sources and visualization are completely separate
 2. **Testability** - Can test visualizations with mock data providers

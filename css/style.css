@@ -206,4 +206,11 @@ button:hover {
 	#token-list-modal td:nth-child(4) {
 		display: none; /* Hide chain column on mobile */
 	}
+}
+
+/* Add styling for submit button success animation */
+button[type="submit"].success {
+	background-color: #00cc44 !important;
+	transform: scale(1.05);
+	transition: all 0.3s ease;
 } 

@@ -282,6 +282,25 @@ export class TagCluster {
 	}
 	
 	/**
+	 * Get a colour based on the blockchain network
+	 * @param {string} chainId - The ID of the blockchain network
+	 * @returns {string} - Hex colour code
+	 */
+	getChainColour(chainId) {
+		const chainColours = {
+			'ethereum': '#3C3C3D', // Dark grey for Ethereum
+			'binance-smart-chain': '#F0B90B', // Yellow for BSC
+			'polygon': '#8247E5', // Purple for Polygon
+			'avalanche': '#E84142', // Red for Avalanche
+			'optimism': '#FF0420', // Bright red for Optimism
+			'arbitrum': '#28A0F0', // Blue for Arbitrum
+			'solana': '#00FFA3', // Bright teal for Solana
+			'base': '#0052FF' // Bright blue for Base
+		};
+		return chainColours[chainId?.toLowerCase()] || '#FFFFFF'; // Default to white if chain not found
+	}
+	
+	/**
 	 * Add a new tag for a token
 	 * @param {Object} token - Token data from DexScreener
 	 * @returns {Object|null} - The created tag or null
@@ -323,7 +342,17 @@ export class TagCluster {
 		// Add $ prefix to symbol if not already present
 		const displaySymbol = symbol.startsWith('$') ? symbol : `$${symbol}`;
 		
-		console.log(`Creating tag for token: ${displaySymbol} with size ${size.toFixed(2)}`);
+		// Determine the chain ID for colour assignment
+		let chainId = token.chainId;
+		if (!chainId && token.baseToken && token.baseToken.chainId) {
+			chainId = token.baseToken.chainId;
+		}
+		if (!chainId) chainId = 'ethereum'; // Default to Ethereum
+		
+		// Get the colour based on the chain
+		const tagColour = this.getChainColour(chainId);
+		
+		console.log(`Creating tag for token: ${displaySymbol} with size ${size.toFixed(2)} and colour ${tagColour}`);
 		
 		// Create the tag
 		try {
@@ -331,13 +360,16 @@ export class TagCluster {
 				scale: size,
 				size: 0.5,     // Base text size before scaling
 				depth: 0.65,   // Extrusion depth 
-				token: token   // Store reference to token data
+				token: token,   // Store reference to token data
+				color: tagColour // Assign colour based on chain
 			});
 			
 			// If successful, store in our mapping
 			if (tag) {
 				this.tokenTags.set(tokenKey, tag.id);
-				console.log(`Added token tag: ${displaySymbol} with size ${size.toFixed(2)}`);
+				// Set initial lastInteractionTime to creation time
+				tag.lastInteractionTime = tag.createdAt;
+				console.log(`Added token tag: ${displaySymbol} with size ${size.toFixed(2)} and colour ${tagColour}`);
 			} else {
 				console.error(`Failed to create tag for token: ${displaySymbol}`);
 			}

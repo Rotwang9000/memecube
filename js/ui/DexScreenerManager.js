@@ -7,7 +7,7 @@ import { TokenScoreboard } from '../visualizations/token-scoreboard.js';
 import { TokenChart3D } from '../visualizations/token-chart-3d.js';
 import { TagCluster } from '../interactions/tag-cluster/tag-cluster.js';
 import { Utils } from '../utils/utils.js';
-import { DexScreenerProcessor } from '../data-processors/DexScreenerProcessor.js';
+import { DexScreenerProvider } from '../data-providers/DexScreenerProvider.js';
 
 export class DexScreenerManager {
 	constructor(scene = null, camera = null, tagsManager = null) {
@@ -21,8 +21,8 @@ export class DexScreenerManager {
 		this.lastCameraMoving = false;
 		this.lastCameraMovingTimestamp = null;
 		
-		// Initialize the data processor
-		this.dataProcessor = new DexScreenerProcessor();
+		// Initialize the data provider
+		this.dataProvider = new DexScreenerProvider();
 		
 		// Setup 3D visualizations if scene is provided
 		if (this.scene && this.camera && this.tagsManager) {
@@ -33,10 +33,10 @@ export class DexScreenerManager {
 		this.createTokenListUI();
 		
 		// Register for data updates
-		this.dataProcessor.registerProcessingCallback(this.onDataUpdate.bind(this));
+		this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
 		
 		// Start auto-refresh
-		this.dataProcessor.startAutoRefresh(6000); // 6 seconds refresh
+		this.dataProvider.startAutoRefresh(15000); // 15 seconds refresh
 	}
 	
 	/**
@@ -93,7 +93,7 @@ export class DexScreenerManager {
 		
 		// Update scoreboard with top tokens
 		if (this.tokenScoreboard && data.length > 0) {
-			this.tokenScoreboard.updateTokenData(data.slice(0, 5));
+			this.tokenScoreboard.updateTokenData(data.slice(0, 30));
 		}
 		
 		// Update token list if visible
@@ -178,8 +178,8 @@ export class DexScreenerManager {
 		
 		cubeButton.onclick = async () => {
 			// Refresh token data and update cube
-			if (this.dataProcessor) {
-				const tokenData = await this.dataProcessor.refreshAllTokenData();
+			if (this.dataProvider) {
+				const tokenData = await this.dataProvider.refreshData();
 				if (this.tokenCube && tokenData.length > 0) {
 					this.tokenCube.updateTokens(tokenData);
 					this.utils.showTemporaryMessage(`Updated token cube with ${tokenData.length} tokens!`);
@@ -292,7 +292,7 @@ export class DexScreenerManager {
 			refreshButton.disabled = true;
 			refreshButton.textContent = '⏳ Refreshing...';
 			
-			await this.dataProcessor.refreshAllTokenData();
+			await this.dataProvider.refreshData();
 			
 			refreshButton.disabled = false;
 			refreshButton.textContent = '🔄 Refresh Data';
@@ -321,8 +321,8 @@ export class DexScreenerManager {
 		this.isModalOpen = true;
 		
 		// If we don't have any data yet, fetch it
-		if (this.dataProcessor.data.length === 0) {
-			await this.dataProcessor.refreshAllTokenData();
+		if (this.dataProvider.getAllTokenData().length === 0) {
+			await this.dataProvider.refreshData();
 		}
 		
 		// Update token list content
@@ -330,178 +330,126 @@ export class DexScreenerManager {
 	}
 	
 	/**
-	 * Update token list content in the modal
+	 * Updates the token list content with current token data
 	 */
 	updateTokenListContent() {
-		if (!this.isModalOpen) return;
-		
-		const container = document.getElementById('token-list-container');
-		if (!container) return;
+		// Get token data
+		const tokenData = this.dataProvider.getAllTokenData();
 		
 		// Clear existing content
-		container.innerHTML = '';
+		const content = this.modalElement.querySelector('.content');
+		if (!content) return;
 		
-		// Get token data
-		const tokens = this.dataProcessor.getAllData();
+		content.innerHTML = '';
 		
-		if (tokens.length === 0) {
-			container.innerHTML = '<p>No token data available. Click refresh to fetch data.</p>';
-			return;
-		}
-		
-		// Create table
+		// Create table for token data
 		const table = document.createElement('table');
 		table.style.width = '100%';
 		table.style.borderCollapse = 'collapse';
 		
-		// Create table header
+		// Add table header
 		const thead = document.createElement('thead');
-		const headerRow = document.createElement('tr');
-		
-		const headers = ['Rank', 'Token', 'Price', 'Change (24h)', 'Volume (24h)', 'Market Cap', 'Actions'];
-		
-		headers.forEach(headerText => {
-			const th = document.createElement('th');
-			th.textContent = headerText;
-			th.style.textAlign = 'left';
-			th.style.padding = '8px';
-			th.style.borderBottom = '1px solid rgba(255, 255, 255, 0.2)';
-			headerRow.appendChild(th);
-		});
-		
-		thead.appendChild(headerRow);
+		thead.innerHTML = `
+			<tr>
+				<th style="text-align: left; padding: 8px; border-bottom: 1px solid #444;">Token</th>
+				<th style="text-align: right; padding: 8px; border-bottom: 1px solid #444;">Price</th>
+				<th style="text-align: right; padding: 8px; border-bottom: 1px solid #444;">24h Change</th>
+				<th style="text-align: right; padding: 8px; border-bottom: 1px solid #444;">Market Cap</th>
+				<th style="text-align: right; padding: 8px; border-bottom: 1px solid #444;">Actions</th>
+			</tr>
+		`;
 		table.appendChild(thead);
 		
-		// Create table body
+		// Add table body
 		const tbody = document.createElement('tbody');
 		
-		tokens.forEach((token, index) => {
-			const row = document.createElement('tr');
-			row.style.borderBottom = '1px solid rgba(255, 255, 255, 0.1)';
+		// Add rows for each token
+		tokenData.forEach((token, index) => {
+			// Get token data
+			const symbol = token.baseToken?.symbol || token.symbol || 'UNKNOWN';
+			const price = parseFloat(token.priceUsd) || 0;
+			const priceChange = parseFloat(token.priceChange?.h24 || 0);
+			const marketCap = token.marketCap ? this.dataProvider.formatMarketCap(parseFloat(token.marketCap)) : 'N/A';
 			
-			// Hover effect
-			row.style.transition = 'background-color 0.2s';
-			row.addEventListener('mouseover', () => {
-				row.style.backgroundColor = 'rgba(0, 100, 150, 0.3)';
-			});
-			row.addEventListener('mouseout', () => {
-				row.style.backgroundColor = 'transparent';
-			});
+			// Format price
+			const formattedPrice = price < 0.01 ? price.toExponential(2) : price.toFixed(2);
 			
-			// Rank cell
-			const rankCell = document.createElement('td');
-			rankCell.textContent = (index + 1).toString();
-			rankCell.style.padding = '8px';
+			// Create row
+			const tr = document.createElement('tr');
+			tr.style.borderBottom = '1px solid #333';
 			
-			// Token cell
-			const tokenCell = document.createElement('td');
-			tokenCell.style.padding = '8px';
+			// Add token symbol and icon
+			const logoUrl = token.imageUrl || `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${symbol.toLowerCase()}.png`;
 			
-			const tokenSymbol = token.baseToken?.symbol || 'Unknown';
-			const tokenChain = token.chainId || 'Unknown';
-			
-			tokenCell.innerHTML = `
-				<strong>${tokenSymbol}</strong>
-				<div style="font-size: 0.8em; opacity: 0.7;">${tokenChain}</div>
+			tr.innerHTML = `
+				<td style="padding: 8px;">
+					<div style="display: flex; align-items: center;">
+						<img 
+							src="${logoUrl}" 
+							onerror="this.src='https://placehold.co/32x32/282828/717171?text=${symbol.charAt(0)}'; this.onerror=null;" 
+							style="width: 24px; height: 24px; margin-right: 8px; border-radius: 50%;"
+						>
+						<span>${symbol}</span>
+					</div>
+				</td>
+				<td style="padding: 8px; text-align: right;">$${formattedPrice}</td>
+				<td style="padding: 8px; text-align: right; color: ${priceChange >= 0 ? '#4CAF50' : '#F44336'};">
+					${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%
+				</td>
+				<td style="padding: 8px; text-align: right;">${marketCap}</td>
+				<td style="padding: 8px; text-align: right;">
+					<button class="chart-btn" data-index="${index}" style="background: #4a5568; border: none; padding: 4px 8px; border-radius: 4px; color: white; cursor: pointer;">
+						Chart
+					</button>
+					<button class="add-btn" data-index="${index}" style="background: #38a169; border: none; padding: 4px 8px; border-radius: 4px; color: white; cursor: pointer; margin-left: 4px;">
+						Add
+					</button>
+				</td>
 			`;
 			
-			// Price cell
-			const priceCell = document.createElement('td');
-			priceCell.style.padding = '8px';
-			
-			const price = parseFloat(token.priceUsd);
-			priceCell.textContent = price ? `$${price.toFixed(price < 0.01 ? 8 : 4)}` : 'N/A';
-			
-			// Change cell
-			const changeCell = document.createElement('td');
-			changeCell.style.padding = '8px';
-			
-			const priceChange = parseFloat(token.priceChange?.h24 || 0);
-			changeCell.textContent = `${priceChange > 0 ? '+' : ''}${priceChange.toFixed(2)}%`;
-			changeCell.style.color = priceChange > 0 ? '#00ff00' : (priceChange < 0 ? '#ff5555' : 'white');
-			
-			// Volume cell
-			const volumeCell = document.createElement('td');
-			volumeCell.style.padding = '8px';
-			
-			const volume = parseFloat(token.volume?.h24 || 0);
-			volumeCell.textContent = volume ? `$${(volume >= 1e6 ? (volume / 1e6).toFixed(2) + 'M' : volume.toFixed(2))}` : 'N/A';
-			
-			// Market cap cell
-			const mcapCell = document.createElement('td');
-			mcapCell.style.padding = '8px';
-			
-			const mcap = parseFloat(token.marketCap || 0);
-			mcapCell.textContent = mcap ? this.dataProcessor.formatMarketCap(mcap) : 'N/A';
-			
-			// Actions cell
-			const actionsCell = document.createElement('td');
-			actionsCell.style.padding = '8px';
-			
-			// Add "View Chart" button
-			const chartButton = document.createElement('button');
-			chartButton.textContent = '📈 Chart';
-			chartButton.style.marginRight = '5px';
-			chartButton.style.padding = '5px 8px';
-			chartButton.style.backgroundColor = '#005577';
-			chartButton.style.color = 'white';
-			chartButton.style.border = 'none';
-			chartButton.style.borderRadius = '4px';
-			chartButton.style.cursor = 'pointer';
-			chartButton.style.fontSize = '0.8em';
-			
-			chartButton.addEventListener('click', async () => {
-				await this.fetchAndUpdateTokenChart(token);
-			});
-			
-			// Add "Add to Cube" button
-			const cubeButton = document.createElement('button');
-			cubeButton.textContent = '🧊 Cube';
-			cubeButton.style.padding = '5px 8px';
-			cubeButton.style.backgroundColor = '#006644';
-			cubeButton.style.color = 'white';
-			cubeButton.style.border = 'none';
-			cubeButton.style.borderRadius = '4px';
-			cubeButton.style.cursor = 'pointer';
-			cubeButton.style.fontSize = '0.8em';
-			
-			cubeButton.addEventListener('click', () => {
-				const symbol = token.baseToken?.symbol || 'TOKEN';
-				const url = token.url || '#';
-				const size = this.dataProcessor.calculateTokenSize(token);
-				
-				// Dispatch event to add token to cube
-				document.dispatchEvent(new CustomEvent('add-token-to-cube', {
-					detail: { text: symbol, url, size }
-				}));
-				
-				// Provide visual feedback
-				cubeButton.textContent = '✓ Added';
-				cubeButton.style.backgroundColor = '#008800';
-				setTimeout(() => {
-					cubeButton.textContent = '🧊 Cube';
-					cubeButton.style.backgroundColor = '#006644';
-				}, 2000);
-			});
-			
-			actionsCell.appendChild(chartButton);
-			actionsCell.appendChild(cubeButton);
-			
-			// Add cells to row
-			row.appendChild(rankCell);
-			row.appendChild(tokenCell);
-			row.appendChild(priceCell);
-			row.appendChild(changeCell);
-			row.appendChild(volumeCell);
-			row.appendChild(mcapCell);
-			row.appendChild(actionsCell);
-			
-			// Add row to table
-			tbody.appendChild(row);
+			tbody.appendChild(tr);
 		});
 		
 		table.appendChild(tbody);
-		container.appendChild(table);
+		content.appendChild(table);
+		
+		// Add event listeners for chart buttons
+		const chartButtons = content.querySelectorAll('.chart-btn');
+		chartButtons.forEach(button => {
+			button.addEventListener('click', async () => {
+				const index = parseInt(button.getAttribute('data-index'));
+				const token = tokenData[index];
+				if (token) {
+					this.fetchAndUpdateTokenChart(token);
+				}
+			});
+		});
+		
+		// Add event listeners for add buttons
+		const addButtons = content.querySelectorAll('.add-btn');
+		addButtons.forEach(button => {
+			button.addEventListener('click', () => {
+				const index = parseInt(button.getAttribute('data-index'));
+				const token = tokenData[index];
+				if (token) {
+					// Create event with token data
+					const event = new CustomEvent('add-token-to-cube', {
+						detail: {
+							text: token.baseToken?.symbol || token.symbol || 'TOKEN',
+							url: token.url || `https://dexscreener.com/${token.chainId || 'eth'}/${token.pairAddress || token.tokenAddress}`,
+							size: this.dataProvider.calculateTokenSize(token),
+							tokenData: token
+						}
+					});
+					
+					// Dispatch event
+					document.dispatchEvent(event);
+					
+					// Show message
+					this.utils.showTemporaryMessage(`Added ${token.baseToken?.symbol || token.symbol} to the cube!`);
+				}
+			});
+		});
 	}
 	
 	/**
@@ -517,17 +465,25 @@ export class DexScreenerManager {
 	 * @param {Object} token Token to show chart for
 	 */
 	async fetchAndUpdateTokenChart(token) {
-		if (!this.tokenChart) return;
+		if (!this.tokenChart || !token) return;
 		
-		// Get price history for token
-		const priceHistory = await this.dataProcessor.fetchTokenPriceHistory(token);
-		
-		// Update chart with token data
-		if (priceHistory && priceHistory.length > 0) {
-			this.tokenChart.updateChartData(priceHistory, token.baseToken?.symbol || 'TOKEN');
-			this.utils.showTemporaryMessage(`Updated chart with ${token.baseToken?.symbol || 'TOKEN'} data!`);
-		} else {
-			this.utils.showTemporaryMessage('No chart data available for this token');
+		try {
+			// Show loading message
+			this.utils.showTemporaryMessage(`Loading chart for ${token.baseToken?.symbol || token.symbol}...`);
+			
+			// Fetch price history
+			const priceHistory = await this.dataProvider.getTokenPriceHistory(token);
+			
+			// Update chart with price history
+			if (priceHistory && priceHistory.length > 0) {
+				this.tokenChart.updateWithPriceHistory(priceHistory, token.baseToken?.symbol || token.symbol);
+				this.utils.showTemporaryMessage(`Loaded price chart for ${token.baseToken?.symbol || token.symbol}`);
+			} else {
+				this.utils.showTemporaryMessage(`No price data available for ${token.baseToken?.symbol || token.symbol}`);
+			}
+		} catch (error) {
+			console.error('Error fetching price history:', error);
+			this.utils.showTemporaryMessage('Error loading price data');
 		}
 	}
 	
@@ -598,78 +554,43 @@ export class DexScreenerManager {
 	}
 	
 	/**
-	 * Show a demo token in visualizations
+	 * Show demo token for testing
 	 */
 	async showDemoToken() {
-		if (!this.tokenChart) return;
-		
-		// Show a featured demo token
+		// Create demo token with custom data
 		const demoToken = {
-			baseToken: { symbol: 'PEPE' },
-			chainId: 'ethereum',
+			baseToken: {
+				symbol: 'PEPE',
+				name: 'Pepe'
+			},
+			chainId: 'eth',
 			tokenAddress: '0x6982508145454ce325ddbe47a25d4ec3d2311933',
-			priceUsd: '0.00000094',
-			priceChange: { h24: 3.5 },
-			volume: { h24: '4500000' },
-			liquidity: { usd: '8700000' },
-			dexId: 'uniswap',
-			pairAddress: '0xea9d346d773eee9c1e81ad3d0fbb81b14b0a5c13'
+			priceUsd: '0.00000123',
+			priceChange: {
+				h24: 12.34
+			},
+			volume: {
+				h24: '123456789'
+			},
+			marketCap: '98765432',
+			dataSource: 'dexscreener',
+			tokenData: {
+				symbol: 'PEPE'
+			}
 		};
 		
-		// Update the token chart with sample data or real data if available
-		const priceHistory = await this.dataProcessor.fetchTokenPriceHistory(demoToken);
-		
-		if (priceHistory && priceHistory.length > 0) {
-			this.tokenChart.updateChartData(priceHistory, demoToken.baseToken.symbol);
-		} else {
-			// Generate sample price data if real data isn't available
-			const samplePriceData = [];
-			const price = parseFloat(demoToken.priceUsd);
-			const now = Date.now();
-			const hourMs = 3600 * 1000;
-			
-			for (let i = 0; i < 48; i++) {
-				// Create slightly randomized price data going back 48 hours
-				const randomFactor = 1 + (Math.random() * 0.2 - 0.1);
-				samplePriceData.push({
-					time: now - (48 - i) * hourMs,
-					price: price * (0.8 + i * 0.01) * randomFactor
-				});
+		// Add to token cube
+		const event = new CustomEvent('add-token-to-cube', {
+			detail: {
+				text: demoToken.baseToken.symbol,
+				url: `https://dexscreener.com/${demoToken.chainId}/${demoToken.tokenAddress}`,
+				size: this.dataProvider.calculateTokenSize(demoToken),
+				tokenData: demoToken
 			}
-			
-			this.tokenChart.updateChartData(samplePriceData, demoToken.baseToken.symbol);
-		}
+		});
 		
-		// Update token scoreboard with demo token
-		if (this.tokenScoreboard) {
-			const demoTokens = [demoToken];
-			// Add some more sample tokens to the scoreboard
-			demoTokens.push({
-				baseToken: { symbol: 'DOGE' },
-				priceUsd: '0.12',
-				priceChange: { h24: 1.5 }
-			});
-			demoTokens.push({
-				baseToken: { symbol: 'SHIB' },
-				priceUsd: '0.000019',
-				priceChange: { h24: -0.8 }
-			});
-			
-			this.tokenScoreboard.updateTokenData(demoTokens);
-		}
+		document.dispatchEvent(event);
 		
-		// Update token cube with demo token
-		if (this.tokenCube) {
-			// Dispatch event to add token to cube
-			document.dispatchEvent(new CustomEvent('add-token-to-cube', {
-				detail: { 
-					text: demoToken.baseToken.symbol, 
-					url: `https://dexscreener.com/ethereum/${demoToken.tokenAddress}`,
-					size: 1.5 
-				}
-			}));
-		}
-		
-		this.utils.showTemporaryMessage('Demo token data loaded!');
+		this.utils.showTemporaryMessage('Added demo token to the cube!');
 	}
 } 

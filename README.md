@@ -214,18 +214,23 @@ The codebase is organized into the following folders:
 
 ### Core Structure
 - `js/core/` - Core application components (scene, controls)
-- `js/data-processors/` - Data processing classes for different API sources
+- `js/data-providers/` - Provider-agnostic data integration system
 - `js/interactions/` - Tag-related interactions and components
 - `js/ui/` - UI components and managers
 - `js/utils/` - Utility functions and helpers
 - `js/visualizations/` - 3D visualizations (scoreboard, chart, Isometric Cluster)
 
-### Data Processing
-The application uses a generic data processing architecture that allows for adding multiple data sources:
-- `DataProcessor.js` - Base class for all data processors
-- `DexScreenerProcessor.js` - Implementation for DexScreener API
+### Data Provider Architecture
+The application uses a provider-agnostic architecture that allows for multiple data sources:
+- `TokenDataProvider.js` - Base interface for all data providers
+- `DexScreenerProvider.js` - Implementation for DexScreener API
+- `CoinGeckoProvider.js` - Implementation for CoinGecko API
 
-This architecture makes it easy to add new data sources while reusing the visualization components.
+This architecture makes it easy to:
+- Add new data sources without changing visualization code
+- Switch between data sources at runtime
+- Test visualizations with mock data providers
+- Maintain consistent data formatting across different sources
 
 ### Tag System
 The new tag interaction system uses a more robust physics-based approach:

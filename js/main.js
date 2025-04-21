@@ -26,7 +26,7 @@ class MemeCube {
 		
 		// We'll use token data instead of hardcoded tags
 		this.initialTokens = [];
-		this.maxInitialTokens = 15; // Limit to 15 initial tokens
+		this.maxInitialTokens = 30; // Limit to 15 initial tokens
 		
 		this.init();
 	}
@@ -79,6 +79,9 @@ class MemeCube {
 		
 		// Add information button
 		this.setupInfoButton();
+		
+		// Add test button for scoreboard
+		this.setupTestScoreboardButton();
 		
 		// Start demo mode ONLY if explicitly enabled via demoMode flag
 		// Do not auto-start based on tag count
@@ -208,9 +211,10 @@ class MemeCube {
 				}
 				
 				console.log(`Adding token tag: ${symbol} with size ${size.toFixed(2)}`);
+				console.log("Token data:", JSON.stringify(token, null, 2));
 				
-				// Add tag
-				await this.tagsManager.addTag(symbol, url, size);
+				// Add tag with token data
+				await this.tagsManager.addTag(symbol, url, size, token);
 				
 				// Small delay to allow physics to position properly
 				await new Promise(resolve => setTimeout(resolve, 50));
@@ -241,24 +245,54 @@ class MemeCube {
 				const randomSize = 0.8 + Math.random() * 0.8;
 				
 				try {
-					await this.tagsManager.addTag(tagName, tagUrl, randomSize);
+					// Check if we have token data for this tag
+					let tokenData = null;
+					
+					if (this.dataProvider) {
+						// Try to find token data by symbol
+						const allTokens = this.dataProvider.getAllTokenData();
+						tokenData = allTokens.find(token => {
+							const symbol = token.baseToken?.symbol || token.symbol || token.name;
+							return symbol && symbol.toUpperCase() === tagName;
+						});
+						
+						// Log whether we found token data
+						console.log(`Token data for ${tagName}: ${tokenData ? 'Found' : 'Not found'}`);
+						if (tokenData) {
+							console.log("Token data details:", JSON.stringify(tokenData, null, 2));
+						}
+						
+						if (!tokenData) {
+							// If no token data found, try to fetch it from the API
+							console.log(`No token data found for ${tagName}, searching...`);
+							try {
+								// This would ideally call a method to search for a token by symbol
+								// but we'll keep it simple for now
+								// Future enhancement: this.dataProvider.searchTokenBySymbol(tagName)
+							} catch (searchError) {
+								console.warn(`Could not fetch token data for ${tagName}:`, searchError);
+							}
+						}
+					}
+					
+					// Add tag with any token data we found
+					await this.tagsManager.addTag(tagName, tagUrl, randomSize, tokenData);
 					
 					// Clear form
 					document.getElementById('tag-name').value = '';
 					document.getElementById('tag-url').value = '';
 					
 					// Animate the submit button to show success
-					const button = form.querySelector('button');
-					button.classList.add('tag-submit-animation');
-					button.textContent = 'Tag Launched!';
-					
+					const submitButton = form.querySelector('button[type="submit"]');
+					submitButton.classList.add('success');
 					setTimeout(() => {
-						button.classList.remove('tag-submit-animation');
-						button.textContent = 'Launch Tag';
-					}, 2000);
+						submitButton.classList.remove('success');
+					}, 1000);
+					
+					this.utils.showTemporaryMessage(`Added $${tagName} to the cube!`);
 				} catch (error) {
 					console.error('Error adding tag:', error);
-					alert('Failed to add tag. Please try again.');
+					this.utils.showTemporaryMessage('Error adding tag - please try again');
 				}
 			}
 		});
@@ -337,6 +371,8 @@ class MemeCube {
 			<p>Features:</p>
 			<ul>
 				<li>3D cube of meme coin tags</li>
+				<li>Detailed token scoreboard when tags are clicked</li>
+				<li>Social media links displayed as mini planets</li>
 				<li>Space-themed LED scoreboard showing live token data</li>
 				<li>3D price chart visualization</li>
 				<li>Integration with DexScreener API</li>
@@ -346,7 +382,7 @@ class MemeCube {
 				<li>Drag to rotate the view</li>
 				<li>Scroll to zoom in/out</li>
 				<li>Right-click drag to pan</li>
-				<li>Click on any tag to visit its URL</li>
+				<li>Click on any tag to view token information</li>
 			</ul>
 			<p>Submit your own tag using the form in the top right!</p>
 		`;
@@ -459,13 +495,40 @@ class MemeCube {
 		const intersectedTag = this.tagsManager.tagManager.findIntersectedTag();
 		
 		if (intersectedTag) {
-			// Provide visual feedback
-			this.tagsManager.tagManager.pulseTag(intersectedTag);
+			console.log("Tag clicked:", intersectedTag);
 			
-			// Open the URL if available
-			if (intersectedTag.url && intersectedTag.url !== '#') {
-				window.open(intersectedTag.url, '_blank');
+			// Ensure token data is attached to the tag before handling click
+			if (!intersectedTag.tokenData && this.dataProvider) {
+				const symbolName = intersectedTag.originalName || intersectedTag.name.replace('$', '');
+				console.log("Looking for token data for symbol:", symbolName);
+				
+				// Get all token data and find the one matching our symbol
+				const allTokenData = this.dataProvider.getAllTokenData();
+				console.log("Available tokens:", allTokenData.length);
+				
+				const tokenData = allTokenData.find(token => {
+					const tokenSymbol = token.baseToken?.symbol || token.symbol || '';
+					const match = tokenSymbol.toUpperCase() === symbolName.toUpperCase();
+					if (match) {
+						console.log("Found matching token:", tokenSymbol);
+					}
+					return match;
+				});
+				
+				if (tokenData) {
+					console.log("Found token data for", symbolName);
+					console.log("Token data:", JSON.stringify(tokenData, null, 2));
+					intersectedTag.tokenData = tokenData;
+				} else {
+					console.log("No token data found for", symbolName);
+				}
+			} else {
+				console.log("Tag already has token data:", !!intersectedTag.tokenData);
 			}
+			
+			// Let TagManager handle all tag clicks - it will show scoreboard
+			// and display URL as a clickable planet
+			this.tagsManager.tagManager.handleTagClick(intersectedTag);
 		}
 	}
 	
@@ -507,6 +570,65 @@ class MemeCube {
 		if (this.visualizationManager) {
 			this.visualizationManager.update(deltaTime, isCameraMoving);
 		}
+	}
+	
+	// Setup test button for scoreboard
+	setupTestScoreboardButton() {
+		const testButton = document.createElement('button');
+		testButton.textContent = '🔍 Test Scoreboard';
+		testButton.style.position = 'absolute';
+		testButton.style.bottom = '220px';
+		testButton.style.right = '20px';
+		testButton.style.zIndex = '1000';
+		testButton.style.backgroundColor = 'rgba(200, 50, 50, 0.8)';
+		testButton.style.color = 'white';
+		testButton.style.border = '1px solid rgba(255, 100, 100, 0.3)';
+		testButton.style.borderRadius = '4px';
+		testButton.style.padding = '5px 10px';
+		testButton.style.cursor = 'pointer';
+		document.body.appendChild(testButton);
+		
+		// Create a test tag with known data
+		testButton.onclick = () => {
+			console.log("Testing scoreboard display");
+			
+			// Create a test token with all fields populated
+			const testToken = {
+				baseToken: {
+					symbol: "TEST",
+					name: "Test Token"
+				},
+				quoteToken: {
+					symbol: "ETH"
+				},
+				priceUsd: "$0.12345",
+				priceNative: "0.00012 ETH",
+				liquidity: {
+					usd: 1000000
+				},
+				marketCap: 5000000,
+				fdv: 10000000,
+				chainId: "eth",
+				dexId: "uniswap",
+				pairAddress: "0x1234567890abcdef",
+				url: "https://example.com/token/TEST"
+			};
+			
+			// Create a test tag
+			const testTag = {
+				id: "test_tag_" + Date.now(),
+				name: "$TEST",
+				originalName: "TEST",
+				url: "https://example.com/token/TEST",
+				createdAt: Date.now(),
+				tokenData: testToken
+			};
+			
+			// Display the scoreboard directly
+			this.tagsManager.tagManager.displayTokenScoreboard(testTag);
+			
+			this.utils.showTemporaryMessage("Displaying test scoreboard");
+		};
 	}
 }
 

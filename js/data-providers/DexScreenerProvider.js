@@ -80,8 +80,8 @@ export class DexScreenerProvider extends TokenDataProvider {
 			const now = Date.now();
 			
 			// Check if overall cache is expired (older than 24 hours)
-			if (now - parsedCache.timestamp > 24 * 60 * 60 * 1000) {
-				console.log('DexScreenerProvider: Cache in localStorage is older than 24 hours, discarding');
+			if (now - parsedCache.timestamp > 600000) {
+				console.log('DexScreenerProvider: Cache in localStorage is older than 10 minutes, discarding');
 				localStorage.removeItem('tokenPairCache');
 				return;
 			}
