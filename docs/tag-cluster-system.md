@@ -22,7 +22,7 @@ The system consists of the following key components:
    - Handles tag entry animations, movement chains, and structure maintenance
 
 4. **TagCluster** (`js/interactions/tag-cluster/tag-cluster.js`)
-   - Integration layer between DexScreener token data and tag system
+   - Integration layer between TokenVisualizationManager token data and tag system
    - Manages token-specific tags with market cap-based sizing
    - Updates token appearance based on price changes
 
@@ -50,7 +50,7 @@ The system consists of the following key components:
 ## Usage Flow
 
 1. Application initializes TagsManager
-2. DexScreenerManager communicates with TagsManager to add/update tokens
+2. TokenVisualizationManager communicates with TagsManager to add/update tokens
 3. Users can add tags via form or view demo tags
 4. TagsManager delegates to TagManager for creation
 5. TagManager handles visualization and interactions

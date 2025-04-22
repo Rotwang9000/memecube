@@ -30,7 +30,7 @@ A Three.js-based interactive 3D application that displays meme coin tags as a co
   - `/js/data-providers/TokenDataProvider.js` - Base interface for all data providers
   - `/js/data-providers/DexScreenerProvider.js` - DexScreener API implementation
   - `/js/data-providers/CoinGeckoProvider.js` - CoinGecko API implementation
-- `/js/ui/DexScreenerManager.js` - UI management for token data
+- `/js/ui/TokenVisualizationManager.js` - UI management for token data
 - `/js/visualizations/` - 3D visualizations
   - `/js/visualizations/token-scoreboard.js` - LED scoreboard for token data
   - `/js/visualizations/token-chart-3d.js` - 3D chart visualization
@@ -100,7 +100,7 @@ memecube/
 │   │   │   └── tag-cluster.js
 │   │   └── [...]
 │   ├── 📁 ui/
-│   │   └── VisualizationManager.js
+│   │   └── TokenVisualizationManager.js
 │   ├── 📁 utils/
 │   │   └── [...]
 │   ├── 📁 visualizations/

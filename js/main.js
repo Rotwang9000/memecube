@@ -47,6 +47,12 @@ class MemeCube {
 		// Initialize visualization module first to get token data
 		await this.initVisualizations();
 		
+		// Now that visualizationManager is created, connect it to the tagsManager
+		if (this.visualizationManager) {
+			console.log('Connecting VisualizationManager to TagManager');
+			this.tagsManager.tagManager.setVisualizationManager(this.visualizationManager);
+		}
+		
 		// Add initial tags from token data
 		await this.addInitialTokensFromProvider();
 		

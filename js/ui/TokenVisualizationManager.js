@@ -1,6 +1,6 @@
 /**
- * DexScreener UI Manager
- * Handles UI and visualization for DexScreener data
+ * Token Visualization Manager
+ * Handles UI and visualization for token data
  */
 
 import { TokenScoreboard } from '../visualizations/token-scoreboard.js';
@@ -9,8 +9,8 @@ import { TagCluster } from '../interactions/tag-cluster/tag-cluster.js';
 import { Utils } from '../utils/utils.js';
 import { DexScreenerProvider } from '../data-providers/DexScreenerProvider.js';
 
-export class DexScreenerManager {
-	constructor(scene = null, camera = null, tagsManager = null) {
+export class TokenVisualizationManager {
+	constructor(scene = null, camera = null, tagsManager = null, dataProvider = null) {
 		this.scene = scene;
 		this.camera = camera;
 		this.tagsManager = tagsManager;
@@ -21,8 +21,8 @@ export class DexScreenerManager {
 		this.lastCameraMoving = false;
 		this.lastCameraMovingTimestamp = null;
 		
-		// Initialize the data provider
-		this.dataProvider = new DexScreenerProvider();
+		// Initialize the data provider - use provided one or default to DexScreener
+		this.dataProvider = dataProvider || new DexScreenerProvider();
 		
 		// Setup 3D visualizations if scene is provided
 		if (this.scene && this.camera && this.tagsManager) {
@@ -40,6 +40,27 @@ export class DexScreenerManager {
 	}
 	
 	/**
+	 * Set a different data provider
+	 * @param {TokenDataProvider} provider The data provider to use
+	 */
+	setDataProvider(provider) {
+		// Unregister from current provider
+		if (this.dataProvider) {
+			this.dataProvider.unregisterUpdateCallback(this.onDataUpdate.bind(this));
+			this.dataProvider.stopAutoRefresh();
+		}
+		
+		// Set new provider
+		this.dataProvider = provider;
+		
+		// Register with new provider
+		if (this.dataProvider) {
+			this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
+			this.dataProvider.startAutoRefresh();
+		}
+	}
+	
+	/**
 	 * Setup 3D visualizations (scoreboard, chart, and tag cluster)
 	 */
 	setupVisualizations() {
@@ -50,7 +71,7 @@ export class DexScreenerManager {
 		this.tokenChart = new TokenChart3D(this.scene, this.camera);
 		
 		// Create tag cluster visualization (replaces token cube)
-		this.tokenCube = new TagCluster(this.scene, this.camera, this.tagsManager);
+		this.tokenCluster = new TagCluster(this.scene, this.camera, this.tagsManager);
 		
 		// Create UI toggle button for visualizations
 		this.createVisualizationToggle();
@@ -70,11 +91,9 @@ export class DexScreenerManager {
 			this.tokenChart.updateScreenPosition();
 		}
 		
-		// Don't try to access cubeGroup directly as it doesn't exist in TagCluster
-		// Instead, initialize the tag cluster if needed
-		if (this.tokenCube) {
-			// The token cluster manages its own visibility through its tag manager
-			this.tokenCube.initialize([]);
+		// Initialize the tag cluster with empty data
+		if (this.tokenCluster) {
+			this.tokenCluster.initialize([]);
 		}
 		
 		// Generate sample data for visualizations
@@ -86,9 +105,9 @@ export class DexScreenerManager {
 	 * @param {Array} data Updated token data
 	 */
 	onDataUpdate(data) {
-		// Update token cube with all token data
-		if (this.tokenCube && data.length > 0) {
-			this.tokenCube.updateTokens(data);
+		// Update token cluster with all token data
+		if (this.tokenCluster && data.length > 0) {
+			this.tokenCluster.updateTokens(data);
 		}
 		
 		// Update scoreboard with top tokens
@@ -168,26 +187,26 @@ export class DexScreenerManager {
 		
 		document.body.appendChild(demoButton);
 		
-		// Add token cube toggle button
-		const cubeButton = document.createElement('button');
-		cubeButton.textContent = '🔄 Token Cube';
-		cubeButton.style.position = 'absolute';
-		cubeButton.style.bottom = '220px';
-		cubeButton.style.right = '20px';
-		cubeButton.style.zIndex = '1000';
+		// Add token refresh button
+		const refreshButton = document.createElement('button');
+		refreshButton.textContent = '🔄 Refresh Tokens';
+		refreshButton.style.position = 'absolute';
+		refreshButton.style.bottom = '220px';
+		refreshButton.style.right = '20px';
+		refreshButton.style.zIndex = '1000';
 		
-		cubeButton.onclick = async () => {
-			// Refresh token data and update cube
+		refreshButton.onclick = async () => {
+			// Refresh token data and update cluster
 			if (this.dataProvider) {
 				const tokenData = await this.dataProvider.refreshData();
-				if (this.tokenCube && tokenData.length > 0) {
-					this.tokenCube.updateTokens(tokenData);
-					this.utils.showTemporaryMessage(`Updated token cube with ${tokenData.length} tokens!`);
+				if (this.tokenCluster && tokenData.length > 0) {
+					this.tokenCluster.updateTokens(tokenData);
+					this.utils.showTemporaryMessage(`Updated token cluster with ${tokenData.length} tokens!`);
 				}
 			}
 		};
 		
-		document.body.appendChild(cubeButton);
+		document.body.appendChild(refreshButton);
 	}
 	
 	/**
@@ -204,11 +223,9 @@ export class DexScreenerManager {
 			this.tokenChart.toggleVisibility();
 		}
 		
-		// TagCluster doesn't have a direct visibility toggle, 
-		// so we don't try to access the non-existent cubeGroup
-		if (this.tokenCube && this.tokenCube.tagManager) {
-			// Update tags visibility through the tag manager instead
-			this.tokenCube.tagManager.tags.forEach(tag => {
+		// Update tag cluster visibility through tag manager
+		if (this.tokenCluster && this.tokenCluster.tagManager) {
+			this.tokenCluster.tagManager.tags.forEach(tag => {
 				if (tag.mesh) {
 					tag.mesh.visible = this.showVisualizations;
 				}
@@ -336,11 +353,17 @@ export class DexScreenerManager {
 		// Get token data
 		const tokenData = this.dataProvider.getAllTokenData();
 		
-		// Clear existing content
-		const content = this.modalElement.querySelector('.content');
-		if (!content) return;
+		// Get the token list container
+		const container = document.getElementById('token-list-container');
+		if (!container) return;
 		
-		content.innerHTML = '';
+		// Clear existing content
+		container.innerHTML = '';
+		
+		if (tokenData.length === 0) {
+			container.innerHTML = '<p>No token data available. Click refresh to fetch data.</p>';
+			return;
+		}
 		
 		// Create table for token data
 		const table = document.createElement('table');
@@ -411,10 +434,10 @@ export class DexScreenerManager {
 		});
 		
 		table.appendChild(tbody);
-		content.appendChild(table);
+		container.appendChild(table);
 		
 		// Add event listeners for chart buttons
-		const chartButtons = content.querySelectorAll('.chart-btn');
+		const chartButtons = container.querySelectorAll('.chart-btn');
 		chartButtons.forEach(button => {
 			button.addEventListener('click', async () => {
 				const index = parseInt(button.getAttribute('data-index'));
@@ -426,7 +449,7 @@ export class DexScreenerManager {
 		});
 		
 		// Add event listeners for add buttons
-		const addButtons = content.querySelectorAll('.add-btn');
+		const addButtons = container.querySelectorAll('.add-btn');
 		addButtons.forEach(button => {
 			button.addEventListener('click', () => {
 				const index = parseInt(button.getAttribute('data-index'));
@@ -516,9 +539,9 @@ export class DexScreenerManager {
 			this.tokenChart.update(deltaTime);
 		}
 		
-		// Update token cube
-		if (this.tokenCube) {
-			this.tokenCube.update(deltaTime);
+		// Update token cluster
+		if (this.tokenCluster) {
+			this.tokenCluster.update(deltaTime);
 		}
 		
 		// Store camera movement state for next comparison
@@ -540,15 +563,11 @@ export class DexScreenerManager {
 			this.tokenChart.handleInteraction(raycaster);
 		}
 		
-		// Check interaction with token cube - don't access cubeGroup
-		if (this.tokenCube && this.tokenCube.tagManager) {
-			// No need to check cubeGroup.visible - check if we should interact with tags
-			if (this.showVisualizations) {
-				// The TagCluster class doesn't have a handleInteraction method,
-				// but its tagManager might
-				if (typeof this.tokenCube.tagManager.handleInteraction === 'function') {
-					this.tokenCube.tagManager.handleInteraction(raycaster);
-				}
+		// Check interaction with token cluster
+		if (this.tokenCluster && this.tokenCluster.tagManager && this.showVisualizations) {
+			// Check interaction with tag manager
+			if (typeof this.tokenCluster.tagManager.handleInteraction === 'function') {
+				this.tokenCluster.tagManager.handleInteraction(raycaster);
 			}
 		}
 	}
@@ -579,7 +598,7 @@ export class DexScreenerManager {
 			}
 		};
 		
-		// Add to token cube
+		// Add to token cluster
 		const event = new CustomEvent('add-token-to-cube', {
 			detail: {
 				text: demoToken.baseToken.symbol,

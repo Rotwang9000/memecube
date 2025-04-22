@@ -1,0 +1,912 @@
+/**
+ * TagPhysics - Core physics engine for tag positioning and movement
+ * Enforces an interlocking cube structure with strict right-angle orientations
+ */
+
+import * as THREE from 'three';
+
+export class TagPhysics {
+    /**
+     * Create a new TagPhysics instance
+     * @param {THREE.Scene} scene - Three.js scene
+     * @param {Object} options - Configuration options
+     */
+    constructor(scene, options = {}) {
+        this.scene = scene;
+        this.tagManager = options.tagManager || null;
+        this.options = {
+            cubeSize: options.initialCubeSize || 10, // Initial cube size - will adjust dynamically
+            spacing: 0.005,             // Reduced to hair's width spacing between tags
+            centralForce: 0.05,         // Reduced central force for gentler movement
+            surfaceForce: 0.005,        // Significantly reduced surface force 
+            damping: 0.7,               // Increased damping for less bouncy movement
+            maxSpeed: 0.8,              // Reduced max speed for gentler movement
+            collisionForce: 0.05,       // Reduced collision force for gentler pushes
+            faceBalanceFactor: 0.5,     // Factor for balancing tags across faces
+            flipAnimationDuration: 1000, // Duration in ms for flip to face animation
+            stabilityThreshold: 0.01,  // Threshold for considering tags stable
+            ...options
+        };
+
+        // Track tags and their physics data
+        this.tags = new Map();
+        // Track face distribution (6 faces of a cube)
+        this.faceCounts = { px: 0, nx: 0, py: 0, ny: 0, pz: 0, nz: 0 };
+        // Track collision chains to prevent recursive movement
+        this.collisionChains = new Set();
+        // Use animation frame timing instead of absolute time
+        this.clock = new THREE.Clock();
+        this.lastDeltaTime = 0;
+        // Track document visibility for pausing physics
+        this.isDocumentVisible = true;
+        this.isPaused = false;
+        // Set to track tags that were recently pushed (prevents chain reactions)
+        this.recentlyPushedTags = new Map();
+        // Register visibility change listener
+        document.addEventListener('visibilitychange', () => this.handleVisibilityChange());
+    }
+
+    /**
+     * Add a new tag to the physics system
+     * @param {Object} tag - Tag object to add
+     * @param {Array} allTags - Array of all tags for collision checking
+     * @returns {boolean} - Whether placement was successful
+     */
+    addNewTag(tag, allTags) {
+        if (!tag || !tag.mesh) return false;
+
+        // Determine which face to place the tag on (least populated)
+        const targetFace = this.getLeastPopulatedFace();
+        // Assign face to tag for orientation and positioning
+        tag.physicsFace = targetFace;
+        // Increment face count
+        this.faceCounts[targetFace]++;
+
+        // Set initial position far outside the cube at a random angle
+        const initialPosition = this.getRandomSphericalPosition();
+        tag.mesh.position.copy(initialPosition);
+
+        // Set orientation to fly in on its end towards the center, aligned with a cube axis
+        this.setTagFlyInOrientation(tag, initialPosition);
+
+        // Calculate mass based on size (larger tags have more mass)
+        const size = tag.mesh.scale.x;
+        const mass = 1.0 + (size - 1.0) * 2.0; // Increased mass influence for larger tags
+
+        // Calculate initial velocity aiming towards the center
+        const initialVelocity = new THREE.Vector3(0, 0, 0).sub(initialPosition).normalize().multiplyScalar(this.options.maxSpeed * 0.8);
+
+        // Compute bounding box for collision detection
+        this.updateTagBoundingBox(tag);
+
+        // Add physics data to tag
+        const physicsData = {
+            velocity: initialVelocity,
+            force: new THREE.Vector3(0, 0, 0),
+            mass: mass,
+            size: size,
+            isMoving: true,
+            lastCollisionTime: 0,
+            face: targetFace,
+            targetPosition: initialPosition.clone(),
+            // Use elapsed time from clock instead of absolute timestamps
+            creationElapsedTime: this.clock.getElapsedTime(),
+            lastInteractionElapsedTime: this.clock.getElapsedTime()
+        };
+        this.tags.set(tag.id, physicsData);
+        tag.physics = physicsData;
+
+        // Verify that targetPosition was properly initialized
+        if (!physicsData.targetPosition) {
+            console.warn("Failed to initialize targetPosition in physicsData, creating now");
+            physicsData.targetPosition = initialPosition.clone();
+        }
+
+        // Update cube size based on new tag
+        this.updateCubeSize();
+
+        return true;
+    }
+
+    /**
+     * Get a position aligned with the specified face, far outside the cube for fly-in effect
+     * @param {string} face - Face identifier (px, nx, py, ny, pz, nz)
+     * @returns {THREE.Vector3} - Position aligned with the face
+     */
+    getFaceAlignedPosition(face) {
+        const radius = this.options.cubeSize * 3; // Start far out for dramatic effect
+        const offset = radius * 1.5; // Additional offset to ensure alignment far from center
+        switch (face) {
+            case 'px': return new THREE.Vector3(offset, 0, 0);
+            case 'nx': return new THREE.Vector3(-offset, 0, 0);
+            case 'py': return new THREE.Vector3(0, offset, 0);
+            case 'ny': return new THREE.Vector3(0, -offset, 0);
+            case 'pz': return new THREE.Vector3(0, 0, offset);
+            case 'nz': return new THREE.Vector3(0, 0, -offset);
+            default: return new THREE.Vector3(offset, 0, 0);
+        }
+    }
+
+    /**
+     * Update the cube size based on the current tags
+     */
+    updateCubeSize() {
+        if (this.tags.size === 0) return;
+        
+        // Calculate average tag size and count
+        let totalSize = 0;
+        let maxSize = 0;
+        
+        for (const [tagId, physicsData] of this.tags) {
+            totalSize += physicsData.size;
+            maxSize = Math.max(maxSize, physicsData.size);
+        }
+        
+        const avgSize = totalSize / this.tags.size;
+        const tagCount = this.tags.size;
+        
+        // Calculate a dynamic cube size based on:
+        // 1. Average tag size
+        // 2. Number of tags (more tags need more space)
+        // 3. Maximum tag size (to ensure largest tag fits)
+        const baseCubeSize = Math.max(
+            10, // Minimum size
+            avgSize * 3 + maxSize,
+            Math.cbrt(tagCount) * avgSize * 2
+        );
+        
+        // Smooth transition to new cube size
+        this.options.cubeSize = this.options.cubeSize * 0.8 + baseCubeSize * 0.2;
+    }
+
+    /**
+     * Get the least populated face of the cube
+     * @returns {string} - Face identifier (px, nx, py, ny, pz, nz)
+     */
+    getLeastPopulatedFace() {
+        let minCount = Infinity;
+        let targetFace = 'px';
+        for (const [face, count] of Object.entries(this.faceCounts)) {
+            if (count < minCount) {
+                minCount = count;
+                targetFace = face;
+            }
+        }
+        return targetFace;
+    }
+
+    /**
+     * Get a random spherical position far outside the cube for dramatic fly-in
+     * @returns {THREE.Vector3} - Random position on a sphere
+     */
+    getRandomSphericalPosition() {
+        const radius = this.options.cubeSize * 3; // Start far out for dramatic effect
+        const theta = Math.random() * Math.PI * 2; // Azimuthal angle
+        const phi = Math.random() * Math.PI; // Polar angle
+        return new THREE.Vector3(
+            radius * Math.sin(phi) * Math.cos(theta),
+            radius * Math.sin(phi) * Math.sin(theta),
+            radius * Math.cos(phi)
+        );
+    }
+
+    /**
+     * Set tag orientation with X-axis aligned with ray from center (side-first orientation)
+     * @param {Object} tag - Tag to orient
+     * @param {THREE.Vector3} initialPosition - Initial position of the tag
+     */
+    setTagFlyInOrientation(tag, initialPosition) {
+        // Direction from center to initial position (radial ray outward)
+        const radialRay = initialPosition.clone().normalize();
+        
+        // For tags to fly in sideways along the ray:
+        // 1. Tag's X-axis should be aligned with the ray from center
+        // 2. Tag's Z-axis (depth) should be perpendicular to the ray
+        // 3. Tag's Y-axis (height) should be upward-facing when possible
+        
+        // Right direction (X-axis) points along the ray from center
+        const right = radialRay.clone(); // X-axis aligned with ray
+        
+        // Find a consistent up direction (try to keep text upright when possible)
+        const worldUp = new THREE.Vector3(0, 1, 0);
+        
+        // Forward direction (Z-axis) should be perpendicular to both right and up
+        let forward = new THREE.Vector3().crossVectors(worldUp, right).normalize();
+        
+        // If forward vector is too small (ray nearly vertical), use world X as reference
+        if (forward.lengthSq() < 0.01) {
+            const worldForward = new THREE.Vector3(0, 0, 1);
+            forward = new THREE.Vector3().crossVectors(right, worldForward).normalize();
+        }
+        
+        // Recalculate up to ensure perfect orthogonality
+        const up = new THREE.Vector3().crossVectors(forward, right).normalize();
+        
+        // Create rotation matrix with X-axis along ray
+        const rotationMatrix = new THREE.Matrix4();
+        rotationMatrix.makeBasis(right, up, forward);
+        
+        // Apply rotation
+        tag.mesh.quaternion.setFromRotationMatrix(rotationMatrix);
+        
+        // Store original face-based rotation to revert to after fly-in
+        tag.originalRotation = this.getFaceRotation(tag.physicsFace);
+    }
+
+    /**
+     * Get face-based rotation for a tag after fly-in
+     * @param {string} face - Face identifier
+     * @returns {THREE.Euler} - Euler rotation
+     */
+    getFaceRotation(face) {
+        switch (face) {
+            case 'px': return new THREE.Euler(0, 0, 0);
+            case 'nx': return new THREE.Euler(0, Math.PI, 0);
+            case 'py': return new THREE.Euler(Math.PI / 2, 0, 0);
+            case 'ny': return new THREE.Euler(-Math.PI / 2, 0, 0);
+            case 'pz': return new THREE.Euler(0, Math.PI / 2, 0);
+            case 'nz': return new THREE.Euler(0, -Math.PI / 2, 0);
+            default: return new THREE.Euler(0, 0, 0);
+        }
+    }
+
+    /**
+     * Adjust initial position to avoid collisions and pack tags tightly
+     * @param {Object} tag - Tag to adjust
+     * @param {Array} allTags - Array of all tags
+     * @returns {boolean} - Whether adjustment was successful
+     */
+    adjustInitialPosition(tag, allTags) {
+        if (!tag || !tag.mesh || !tag.mesh.position || typeof tag.mesh.position.clone !== 'function') {
+            console.error('Invalid tag or mesh position in adjustInitialPosition', { tag: tag, mesh: tag?.mesh, position: tag?.mesh?.position });
+            return false;
+        }
+
+        const physicsData = this.tags.get(tag.id);
+        if (!physicsData) {
+            console.error('No physics data found for tag in adjustInitialPosition', { tagId: tag.id });
+            return false;
+        }
+
+        if (!Array.isArray(allTags)) {
+            console.error('allTags is not an array in adjustInitialPosition', { allTags: allTags });
+            return false;
+        }
+
+        const face = physicsData.face;
+        const currentPosition = tag.mesh.position.clone();
+        const faceNormal = this.getFaceNormal(face);
+        const stepSize = 0.2; // Small steps to move closer
+        const minDistance = physicsData.size + this.options.spacing;
+        let attempts = 0;
+        const maxAttempts = 50;
+        let bestPosition = currentPosition.clone();
+        let minCollisionDistance = Infinity;
+
+        // Try to move the tag closer to the center along the face normal
+        while (attempts < maxAttempts) {
+            let hasCollision = false;
+            let closestCollisionDistance = Infinity;
+
+            // Check collisions with other tags
+            for (const otherTag of allTags) {
+                if (otherTag.id === tag.id || !otherTag.mesh) continue;
+                const distance = currentPosition.distanceTo(otherTag.mesh.position);
+                const combinedSize = (physicsData.size + (otherTag.physics?.size || physicsData.size)) / 2;
+                const requiredDistance = combinedSize + this.options.spacing;
+
+                if (distance < requiredDistance && distance < closestCollisionDistance) {
+                    hasCollision = true;
+                    closestCollisionDistance = distance;
+                }
+            }
+
+            // Update best position if this is the closest non-colliding position
+            if (!hasCollision && currentPosition.length() < minCollisionDistance) {
+                bestPosition.copy(currentPosition);
+                minCollisionDistance = currentPosition.length();
+            }
+
+            // If no collision, we can stop (position is good)
+            if (!hasCollision) {
+                tag.mesh.position.copy(currentPosition);
+                if (!physicsData.targetPosition) {
+                    physicsData.targetPosition = currentPosition.clone();
+                } else {
+                    physicsData.targetPosition.copy(currentPosition);
+                }
+                return true;
+            }
+
+            // If collision, move away slightly along the face normal or adjust tangentially
+            if (attempts < maxAttempts / 2) {
+                // First half of attempts: move inward along normal
+                currentPosition.add(faceNormal.clone().multiplyScalar(-stepSize));
+            } else {
+                // Second half: adjust tangentially on the face
+                const tangentDir = attempts % 2 === 0 ? this.getTagUpDirection(face) : this.getTagUpDirection(face).cross(faceNormal);
+                currentPosition.add(tangentDir.clone().multiplyScalar(stepSize * (Math.random() - 0.5) * 2));
+            }
+            attempts++;
+        }
+
+        // If we couldn't find a non-colliding position, use the best we have
+        tag.mesh.position.copy(bestPosition);
+        if (!physicsData.targetPosition) {
+            physicsData.targetPosition = bestPosition.clone();
+        } else {
+            physicsData.targetPosition.copy(bestPosition);
+        }
+        return true; // Accept even if there's a minor overlap to ensure placement
+    }
+
+    /**
+     * Remove a tag from the physics system
+     * @param {string} tagId - ID of tag to remove
+     */
+    removeTag(tagId) {
+        const physicsData = this.tags.get(tagId);
+        if (physicsData) {
+            this.faceCounts[physicsData.face]--;
+            this.tags.delete(tagId);
+            // Update cube size after removing a tag
+            this.updateCubeSize();
+        }
+    }
+
+    /**
+     * Handle tag resize
+     * @param {Object} tag - Tag to resize
+     * @param {number} newSize - New size
+     * @returns {boolean} - Whether resize was successful
+     */
+    handleTagResize(tag, newSize) {
+        if (!tag || !tag.mesh || !this.tags.has(tag.id)) return false;
+        tag.mesh.scale.set(newSize, newSize, newSize);
+        const physicsData = this.tags.get(tag.id);
+        physicsData.size = newSize;
+        physicsData.mass = 1.0 + (newSize - 1.0) * 0.5;
+        // Update cube size when a tag is resized
+        this.updateCubeSize();
+        return true;
+    }
+
+    /**
+     * Update physics simulation
+     */
+    update() {
+        // Skip physics update if document is not visible or simulation is paused
+        if (!this.isDocumentVisible || this.isPaused) {
+            // Reset the clock when we're paused to avoid large delta on resume
+            if (this.isPaused) {
+                this.clock.getDelta(); // Consume the delta time
+            }
+            return;
+        }
+
+        // Use THREE.Clock for consistent timing
+        const deltaTime = Math.min(this.clock.getDelta(), 0.05); // Cap at 50ms (20fps minimum)
+        this.lastDeltaTime = deltaTime;
+        
+        // Scale factor to normalize physics rate (16.67ms is approx 60fps)
+        const normalizedDeltaTime = deltaTime / 0.01667;
+
+        // Apply forces to all tags
+        for (const [tagId, physicsData] of this.tags) {
+            const tag = this.getTagById(tagId);
+            if (!tag || !tag.mesh) continue;
+
+            // Get current elapsed time for time-based calculations
+            const currentElapsedTime = this.clock.getElapsedTime();
+            
+            // Reset force
+            physicsData.force.set(0, 0, 0);
+
+            // Apply central force (gentle pull to center)
+            const toCenter = new THREE.Vector3(0, 0, 0).sub(tag.mesh.position).normalize();
+            physicsData.force.add(toCenter.multiplyScalar(this.options.centralForce));
+
+            // Apply minimal surface force to avoid predefined spots
+            const surfaceNormal = this.getFaceNormal(physicsData.face);
+            const surfaceForce = this.options.surfaceForce * 0.1; // Very gentle surface force
+            physicsData.force.add(surfaceNormal.multiplyScalar(surfaceForce));
+
+            // Apply collision forces with gentle pushing
+            this.applyCollisionForces(tag, physicsData, currentElapsedTime);
+
+            // Skip random jiggle - it causes too much instability
+            
+            // Update velocity with strong damping
+            physicsData.velocity.add(physicsData.force.clone().divideScalar(physicsData.mass).multiplyScalar(normalizedDeltaTime));
+            physicsData.velocity.multiplyScalar(Math.pow(this.options.damping, normalizedDeltaTime));
+
+            // Additional stabilization for settled tags
+            if (physicsData.flipCompleted) {
+                // Apply extra damping to settled tags
+                physicsData.velocity.multiplyScalar(0.9);
+                
+                // If velocity is below threshold, stop movement completely
+                if (physicsData.velocity.lengthSq() < this.options.stabilityThreshold * this.options.stabilityThreshold) {
+                    physicsData.velocity.set(0, 0, 0);
+                }
+            }
+
+            // Strict speed limit
+            if (physicsData.velocity.length() > this.options.maxSpeed) {
+                physicsData.velocity.normalize().multiplyScalar(this.options.maxSpeed);
+            }
+
+            // Determine if tag has settled in the cluster based on multiple factors
+            const lowVelocity = physicsData.velocity.length() < 0.03; // More strict velocity threshold
+            const minimumFlightTime = 3.0; // Increased minimum time before considering flip (3 seconds)
+            const ageInSeconds = currentElapsedTime - (physicsData.creationElapsedTime || 0);
+            const hasFlownEnough = ageInSeconds > minimumFlightTime;
+            
+            // Check if the tag is close enough to the center to be considered part of the cluster
+            const distanceToCenter = tag.mesh.position.length();
+            const maxClusterRadius = this.options.cubeSize * 0.85; // Cluster radius as percentage of cube size
+            const isInCluster = distanceToCenter < maxClusterRadius;
+            
+            // Check for neighboring tags to confirm it's actually part of the cluster
+            const hasNeighbors = this.checkForNeighbors(tag, 4.0); // Check for tags within 4.0 units
+            
+            // Detect if tag is stuck (trying to move inward but not getting closer)
+            const stuckDetectionPeriod = 1.5; // Check position changes over 1.5 seconds (slightly longer to be patient)
+            
+            // Initialize position history if needed
+            if (!physicsData.positionHistory) {
+                physicsData.positionHistory = [];
+                physicsData.lastPositionRecordTime = currentElapsedTime;
+            }
+            
+            // Record position periodically
+            if (currentElapsedTime - physicsData.lastPositionRecordTime > 0.2) { // Every 0.2 seconds
+                physicsData.positionHistory.push({
+                    position: tag.mesh.position.clone(),
+                    time: currentElapsedTime
+                });
+                physicsData.lastPositionRecordTime = currentElapsedTime;
+                
+                // Keep only records within the detection period
+                while (physicsData.positionHistory.length > 0 && 
+                      (currentElapsedTime - physicsData.positionHistory[0].time) > stuckDetectionPeriod) {
+                    physicsData.positionHistory.shift();
+                }
+            }
+            
+            // Determine if tag is stuck (trying to move inward but making little progress)
+            let isStuck = false;
+            if (physicsData.positionHistory.length >= 5 && hasFlownEnough) { // Need at least 5 records (~1 second) to assess
+                // Check if tag is moving toward center
+                const movingInward = physicsData.velocity.dot(tag.mesh.position.clone().negate().normalize()) > 0;
+                
+                // If trying to move inward, check if it's making progress
+                if (movingInward) {
+                    // Calculate distance moved over the detection period
+                    const oldestPosition = physicsData.positionHistory[0].position;
+                    const distanceMoved = tag.mesh.position.distanceTo(oldestPosition);
+                    
+                    // If minimal movement despite trying to move inward, consider it stuck
+                    isStuck = distanceMoved < 0.15 && hasNeighbors; // Slightly increased threshold for movement
+                }
+            }
+            
+            // Only consider a tag settled normally when it has low velocity, is in the cluster, and has neighbors
+            // OR if it's stuck trying to move inward (will trigger earlier flip)
+            const isSettled = (lowVelocity && isInCluster && hasNeighbors) || isStuck;
+
+            // Apply magnet-like reorientation during flight to keep tag's X-axis aligned with ray from center
+            if (!physicsData.flipStartElapsedTime && tag.originalRotation) {
+                // Only apply during flight phase (before settling and flipping)
+                const shouldReorient = !isSettled && hasFlownEnough;
+                if (shouldReorient) {
+                    this.applyMagneticReorientation(tag, normalizedDeltaTime);
+                }
+            }
+
+            // Animate flip to face-based orientation after tag has properly settled into the cluster
+            if (hasFlownEnough && isSettled && tag.originalRotation && !physicsData.flipStartElapsedTime) {
+                physicsData.flipStartElapsedTime = currentElapsedTime;
+                physicsData.startQuaternion = tag.mesh.quaternion.clone();
+                
+                // Don't consider the tag fully settled yet - it should continue trying to move inward
+                physicsData.isFullySettled = false;
+            }
+            
+            // Progress the flip animation if it has started
+            if (physicsData.flipStartElapsedTime) {
+                const flipElapsedTime = (currentElapsedTime - physicsData.flipStartElapsedTime) * 1000; // Convert to ms
+                if (flipElapsedTime < this.options.flipAnimationDuration) {
+                    const progress = flipElapsedTime / this.options.flipAnimationDuration;
+                    const targetQuaternion = new THREE.Quaternion().setFromEuler(tag.originalRotation);
+                    tag.mesh.quaternion.slerpQuaternions(physicsData.startQuaternion, targetQuaternion, progress);
+                } else {
+                    tag.mesh.rotation.copy(tag.originalRotation);
+                    delete tag.originalRotation; // Clean up
+                    delete physicsData.startQuaternion;
+                    
+                    // After flip is complete, allow tag to continue moving inward
+                    // Apply a small inward impulse to help it overcome any small barriers
+                    const inwardDirection = tag.mesh.position.clone().negate().normalize();
+                    physicsData.velocity.add(inwardDirection.multiplyScalar(0.03)); // Gentler impulse
+                    
+                    // Mark flip as completed but keep trying to settle better
+                    physicsData.flipCompleted = true;
+                    delete physicsData.flipStartElapsedTime;
+                }
+            }
+            
+            // Update position only if velocity isn't tiny (prevents micro-jitter)
+            if (physicsData.velocity.lengthSq() > 1e-6) {
+                const positionDelta = physicsData.velocity.clone().multiplyScalar(normalizedDeltaTime);
+                tag.mesh.position.add(positionDelta);
+            }
+
+            // Update bounding box for accurate collision detection
+            this.updateTagBoundingBox(tag);
+        }
+    }
+
+    /**
+     * Calculate age factor for a tag (0 for new, 1 for old)
+     * @param {Object} physicsData - Physics data for the tag
+     * @param {number} currentElapsedTime - Current elapsed time from the clock
+     * @returns {number} - Age factor
+     */
+    calculateAgeFactor(physicsData, currentElapsedTime) {
+        const creationTime = physicsData.creationElapsedTime || 0;
+        const ageInSeconds = currentElapsedTime - creationTime;
+        const maxAgeInSeconds = 5 * 60; // 5 minutes max age influence
+        return Math.min(ageInSeconds / maxAgeInSeconds, 1.0);
+    }
+
+    /**
+     * Get face normal vector
+     * @param {string} face - Face identifier
+     * @returns {THREE.Vector3} - Normal vector
+     */
+    getFaceNormal(face) {
+        switch (face) {
+            case 'px': return new THREE.Vector3(1, 0, 0);
+            case 'nx': return new THREE.Vector3(-1, 0, 0);
+            case 'py': return new THREE.Vector3(0, 1, 0);
+            case 'ny': return new THREE.Vector3(0, -1, 0);
+            case 'pz': return new THREE.Vector3(0, 0, 1);
+            case 'nz': return new THREE.Vector3(0, 0, -1);
+            default: return new THREE.Vector3(1, 0, 0);
+        }
+    }
+
+    /**
+     * Constrain velocity to up/down direction relative to tag orientation
+     * @param {Object} tag - Tag object
+     * @param {THREE.Vector3} velocity - Original velocity
+     * @returns {THREE.Vector3} - Constrained velocity
+     */
+    constrainVelocity(tag, velocity) {
+        // Get tag's up direction based on face
+        const upDirection = this.getTagUpDirection(tag.physicsFace);
+        // Project velocity onto up direction
+        const magnitude = velocity.dot(upDirection);
+        return upDirection.clone().multiplyScalar(magnitude);
+    }
+
+    /**
+     * Get tag's up direction based on face
+     * @param {string} face - Face identifier
+     * @returns {THREE.Vector3} - Up direction
+     */
+    getTagUpDirection(face) {
+        switch (face) {
+            case 'px': return new THREE.Vector3(0, 1, 0);
+            case 'nx': return new THREE.Vector3(0, 1, 0);
+            case 'py': return new THREE.Vector3(0, 0, 1);
+            case 'ny': return new THREE.Vector3(0, 0, -1);
+            case 'pz': return new THREE.Vector3(0, 1, 0);
+            case 'nz': return new THREE.Vector3(0, 1, 0);
+            default: return new THREE.Vector3(0, 1, 0);
+        }
+    }
+
+    /**
+     * Apply collision forces between tags using bounding box distances
+     * @param {Object} tag - Tag to check collisions for
+     * @param {Object} physicsData - Physics data for the tag
+     * @param {number} currentElapsedTime - Current elapsed time from the clock
+     */
+    applyCollisionForces(tag, physicsData, currentElapsedTime) {
+        // If this tag has been pushed recently, it shouldn't move in response to collisions
+        if (this.isTagPushed(tag.id)) return;
+        
+        // Track penetration depth and direction to prevent oscillations
+        let maxPenetration = 0;
+        let maxPenetrationDirection = null;
+        let totalCollisionForce = new THREE.Vector3(0, 0, 0);
+        let collisionCount = 0;
+        
+        for (const [otherId, otherPhysics] of this.tags) {
+            if (tag.id === otherId) continue;
+            const otherTag = this.getTagById(otherId);
+            if (!otherTag || !otherTag.mesh) continue;
+
+            // Use bounding box for more accurate collision detection
+            if (!tag.boundingBox || !otherTag.boundingBox) {
+                this.updateTagBoundingBox(tag);
+                this.updateTagBoundingBox(otherTag);
+            }
+
+            // Check if bounding boxes intersect or are too close
+            const distanceVector = tag.mesh.position.clone().sub(otherTag.mesh.position);
+            const distance = distanceVector.length();
+            
+            // Approximate combined size using the largest dimension of bounding boxes plus spacing
+            const tagSize = Math.max(tag.physicsDimensions.x, tag.physicsDimensions.y, tag.physicsDimensions.z);
+            const otherSize = Math.max(otherTag.physicsDimensions.x, otherTag.physicsDimensions.y, otherTag.physicsDimensions.z);
+            const combinedSize = (tagSize + otherSize) / 2 + this.options.spacing;
+
+            if (distance < combinedSize) {
+                // Collision detected
+                const overlap = combinedSize - distance;
+                const direction = distanceVector.normalize();
+                
+                // Update max penetration for strong resolution
+                if (overlap > maxPenetration) {
+                    maxPenetration = overlap;
+                    maxPenetrationDirection = direction.clone();
+                }
+                
+                // If the other tag was pushed, it acts like a solid barrier
+                const otherIsPushed = this.isTagPushed(otherId);
+                
+                // Calculate collision force with special handling for pushed tags
+                let forceMagnitude;
+                const sizeFactor = physicsData.size < 1.5 ? 2.0 : 1.0; // Small tags still get stronger force
+                
+                if (otherIsPushed) {
+                    // Pushed tags exert stronger force (act like solid barriers)
+                    forceMagnitude = this.options.collisionForce * overlap * 3.0;
+                } else if (physicsData.size < otherPhysics.size) {
+                    // Smaller tags push back stronger against larger ones
+                    forceMagnitude = this.options.collisionForce * overlap * sizeFactor * 1.5;
+                } else {
+                    // Normal calculation otherwise
+                    forceMagnitude = this.options.collisionForce * overlap * 1.5 * sizeFactor;
+                }
+                
+                // Accumulate collision forces for averaged application
+                totalCollisionForce.add(direction.multiplyScalar(forceMagnitude));
+                collisionCount++;
+
+                // If collision is strong enough, mark the other tag as pushed
+                // This prevents chain reactions by fixing the tag in place temporarily
+                if (physicsData.velocity.length() > 0.1 && !otherIsPushed && !physicsData.flipCompleted) {
+                    // Only flying tags can push others significantly
+                    const pushStrength = physicsData.velocity.length() * physicsData.mass;
+                    if (pushStrength > 0.2) {
+                        this.markTagAsPushed(otherId, 5.0); // Fix for 5 seconds
+                    }
+                }
+            }
+        }
+        
+        // Apply accumulated collision forces
+        if (collisionCount > 0) {
+            // If we have multiple collisions, average the force to prevent excessive pushing
+            physicsData.force.add(totalCollisionForce.divideScalar(Math.sqrt(collisionCount)));
+            
+            // If this tag pushed others significantly, it should also be fixed briefly
+            // to prevent immediate further movement
+            if (physicsData.velocity.length() > 0.2 && totalCollisionForce.length() > 0.1) {
+                this.markTagAsPushed(tag.id, 2.0); // Fix this tag for 2 seconds (shorter than those it pushed)
+                
+                // Stop its movement
+                physicsData.velocity.set(0, 0, 0);
+            }
+        }
+        
+        // Apply "breathing" space for settled tags periodically
+        if (physicsData.flipCompleted && (!physicsData.lastBreathingTime || 
+            (currentElapsedTime - physicsData.lastBreathingTime > 5.0))) {
+            // Every 5 seconds, apply a small outward push to ensure tags have room to grow
+            for (const [otherId, otherPhysics] of this.tags) {
+                if (tag.id === otherId) continue;
+                const otherTag = this.getTagById(otherId);
+                if (!otherTag || !otherTag.mesh) continue;
+                
+                const distanceVector = tag.mesh.position.clone().sub(otherTag.mesh.position);
+                const distance = distanceVector.length();
+                const minDistance = (physicsData.size + otherPhysics.size) * 1.1; // Ensure 10% extra space
+                
+                if (distance < minDistance) {
+                    // Apply gentle push to maintain minimum distance
+                    const direction = distanceVector.normalize();
+                    const breathingForce = direction.multiplyScalar(0.01 * (minDistance - distance)); // Gentler force
+                    physicsData.force.add(breathingForce);
+                }
+            }
+            
+            physicsData.lastBreathingTime = currentElapsedTime;
+        }
+    }
+
+    /**
+     * Placeholder for getting tag by ID (assumes TagManager has this method)
+     * @param {string} id - Tag ID
+     * @returns {Object|null} - Tag object
+     */
+    getTagById(id) {
+        // Use tagManager if available
+        if (this.tagManager) {
+            return this.tagManager.getTagById(id);
+        }
+        return null;
+    }
+
+    /**
+     * Update tag bounding box for collision detection
+     * @param {Object} tag - Tag to compute bounding box for
+     */
+    updateTagBoundingBox(tag) {
+        if (!tag.mesh) return;
+        // Compute or update the bounding box
+        if (!tag.boundingBox) {
+            tag.boundingBox = new THREE.Box3().setFromObject(tag.mesh);
+        } else {
+            tag.boundingBox.setFromObject(tag.mesh);
+        }
+        // Store dimensions for quick access
+        const size = new THREE.Vector3();
+        tag.boundingBox.getSize(size);
+        tag.physicsDimensions = size;
+    }
+
+    /**
+     * Dispose of resources
+     */
+    dispose() {
+        this.tags.clear();
+        this.faceCounts = { px: 0, nx: 0, py: 0, ny: 0, pz: 0, nz: 0 };
+        this.collisionChains.clear();
+    }
+
+    /**
+     * Handle document visibility change to pause physics when tab is inactive
+     */
+    handleVisibilityChange() {
+        this.isDocumentVisible = document.visibilityState === 'visible';
+        
+        if (this.isDocumentVisible) {
+            // When becoming visible again, reset the clock to prevent large delta
+            this.clock.getDelta(); // Consume any large delta that accumulated while hidden
+            this.isPaused = false;
+            
+            // Reset collision state
+                this.collisionChains.clear();
+                
+            // Reduce any existing velocities to prevent jumps
+                for (const [tagId, physicsData] of this.tags) {
+                    if (physicsData.velocity) {
+                        physicsData.velocity.multiplyScalar(0.1);
+                    }
+                }
+        } else {
+            // Pause the simulation when not visible
+            this.isPaused = true;
+        }
+    }
+
+    /**
+     * Update a tag's last interaction time
+     * @param {string} tagId - ID of the tag
+     */
+    recordTagInteraction(tagId) {
+        const physicsData = this.tags.get(tagId);
+        if (physicsData) {
+            physicsData.lastInteractionElapsedTime = this.clock.getElapsedTime();
+        }
+    }
+
+    /**
+     * Check if a tag has neighbors within specified radius
+     * @param {Object} tag - Tag to check
+     * @param {number} radius - Search radius
+     * @returns {boolean} - Whether the tag has neighbors
+     */
+    checkForNeighbors(tag, radius = 4.0) {
+        if (!tag || !tag.mesh) return false;
+        
+        let neighborCount = 0;
+        const position = tag.mesh.position;
+        const tagSize = tag.physics ? tag.physics.size : 1.0;
+        
+        for (const [otherId, otherPhysics] of this.tags) {
+            if (tag.id === otherId) continue;
+            const otherTag = this.getTagById(otherId);
+            if (!otherTag || !otherTag.mesh) continue;
+            
+            const distance = position.distanceTo(otherTag.mesh.position);
+            const otherSize = otherPhysics.size || 1.0;
+            const combinedSize = (tagSize + otherSize) * 1.5; // Account for tag dimensions plus some buffer
+            
+            if (distance < Math.max(radius, combinedSize)) {
+                neighborCount++;
+                if (neighborCount >= 1) { // Reduced threshold to be more sensitive to nearby tags
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+
+    /**
+     * Apply magnetic reorientation to keep tag's X-axis aligned with ray from center
+     * @param {Object} tag - Tag to reorient
+     * @param {number} normalizedDeltaTime - Normalized delta time for smooth rotation
+     */
+    applyMagneticReorientation(tag, normalizedDeltaTime) {
+        if (!tag || !tag.mesh) return;
+        
+        // Get ray from center to tag position (this is our target X-axis direction)
+        const position = tag.mesh.position.clone();
+        const rayFromCenter = position.clone().normalize();
+        
+        // Get current X-axis direction of tag
+        const tagRight = new THREE.Vector3(1, 0, 0).applyQuaternion(tag.mesh.quaternion).normalize();
+        
+        // Calculate angle between current X-axis and ray from center
+        const angleToRay = tagRight.angleTo(rayFromCenter);
+        
+        // Only reorient if X-axis not aligned with ray by more than 15 degrees
+        if (angleToRay > 0.26) { // ~15 degrees in radians
+            // Create rotation to align X-axis with ray from center
+            const rotationSpeed = 0.12 * normalizedDeltaTime; // Quick rotation for responsive alignment
+            
+            // Calculate rotation axis (cross product gives perpendicular axis)
+            const rotationAxis = new THREE.Vector3().crossVectors(tagRight, rayFromCenter).normalize();
+            
+            // If rotation axis is valid (not zero length), apply rotation
+            if (rotationAxis.lengthSq() > 0.001) {
+                // Create quaternion for incremental rotation
+                const deltaRotation = new THREE.Quaternion().setFromAxisAngle(
+                    rotationAxis, 
+                    Math.min(angleToRay, rotationSpeed) // Limit rotation amount per frame
+                );
+                
+                // Apply incremental rotation
+                tag.mesh.quaternion.premultiply(deltaRotation);
+                tag.mesh.quaternion.normalize(); // Normalize to prevent drift
+            }
+        }
+    }
+
+    /**
+     * Mark a tag as recently pushed, preventing it from moving for a few seconds
+     * @param {string} tagId - ID of the tag to mark
+     * @param {number} duration - Duration in seconds to keep the tag fixed
+     */
+    markTagAsPushed(tagId, duration = 5.0) {
+        const currentTime = this.clock.getElapsedTime();
+        this.recentlyPushedTags.set(tagId, currentTime + duration);
+    }
+    
+    /**
+     * Check if a tag was recently pushed and should remain fixed
+     * @param {string} tagId - ID of the tag to check
+     * @returns {boolean} - Whether the tag should remain fixed
+     */
+    isTagPushed(tagId) {
+        if (!this.recentlyPushedTags.has(tagId)) return false;
+        
+        const currentTime = this.clock.getElapsedTime();
+        const releaseTime = this.recentlyPushedTags.get(tagId);
+        
+        if (currentTime >= releaseTime) {
+            // If the push period has expired, remove from the map
+            this.recentlyPushedTags.delete(tagId);
+            return false;
+        }
+        
+        return true;
+    }
+} 

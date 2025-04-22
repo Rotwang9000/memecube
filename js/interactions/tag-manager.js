@@ -14,11 +14,13 @@ export class TagManager {
 	 * @param {THREE.Scene} scene - Three.js scene
 	 * @param {THREE.Camera} camera - Three.js camera
 	 * @param {Object} options - Configuration options
+	 * @param {Object} visualizationManager - Reference to VisualizationManager
 	 */
-	constructor(scene, camera, options = {}) {
+	constructor(scene, camera, options = {}, visualizationManager = null) {
 		// Store references
 		this.scene = scene;
 		this.camera = camera;
+		this.visualizationManager = visualizationManager;
 		
 		// Configuration
 		this.options = {
@@ -61,6 +63,15 @@ export class TagManager {
 		
 		// Register event listeners
 		this.setupEventListeners();
+	}
+	
+	/**
+	 * Set the VisualizationManager reference after construction
+	 * @param {Object} visualizationManager - Reference to VisualizationManager
+	 */
+	setVisualizationManager(visualizationManager) {
+		this.visualizationManager = visualizationManager;
+		console.log('VisualizationManager set for TagManager');
 	}
 	
 	/**
@@ -301,7 +312,7 @@ export class TagManager {
 	 * Handle a click on a tag
 	 * @param {Object} tag - The tag that was clicked
 	 */
-	handleTagClick(tag) {
+	async handleTagClick(tag) {
 		if (!tag) {
 			console.warn('handleTagClick called with null tag');
 			return;
@@ -322,12 +333,128 @@ export class TagManager {
 		// Animate the tag (pulse)
 		this.pulseTag(tag);
 		
-		// Always display token information in scoreboard - never open URLs directly
-		console.log('Displaying token scoreboard for tag');
-		this.displayTokenScoreboard(tag);
+		// Check if VisualizationManager exists
+		if (!this.visualizationManager) {
+			console.warn('VisualizationManager not available for tag click');
+			return;
+		}
 		
-		// Log click
+		// Log scoreboard existence state
+		console.log('VisualizationManager found:', !!this.visualizationManager);
+		console.log('TokenScoreboard exists:', !!this.visualizationManager.tokenScoreboard);
+		
+		// Use TokenScoreboard to display token information
+		console.log('Displaying token information using TokenScoreboard');
+		
+		// Get token data for display - either use existing data or create minimal data
+		let tokenData = tag.tokenData ? { ...tag.tokenData } : this.createMinimalTokenData(tag);
+		
+		// Ensure token data has required fields, backfilling with defaults if needed
+		this.ensureTokenDataComplete(tokenData, tag);
+		
+		console.log('Prepared token data for display:', tokenData);
+		
+		// Try to use the scoreboard from visualizationManager
+		if (this.visualizationManager.tokenScoreboard) {
+			console.log('Using tokenScoreboard from VisualizationManager');
+			try {
+				// Update token data and display scoreboard
+				this.visualizationManager.tokenScoreboard.updateTokenData([tokenData]);
+				this.visualizationManager.tokenScoreboard.toggleVisibility(true);
+			} catch (error) {
+				console.error('Error displaying token scoreboard:', error);
+			}
+		} else {
+			console.warn('TokenScoreboard not found in VisualizationManager');
+		}
+		
+		// Log click completion
 		console.log(`Tag click handling complete for ${tag.name}`);
+	}
+	
+	/**
+	 * Ensure token data has all required fields for display
+	 * @param {Object} tokenData - Token data to augment
+	 * @param {Object} tag - Original tag object
+	 */
+	ensureTokenDataComplete(tokenData, tag) {
+		const symbol = tokenData.baseToken?.symbol || 
+			tag.originalName || 
+			tag.name.replace('$', '');
+		
+		// Ensure base token exists
+		if (!tokenData.baseToken) {
+			tokenData.baseToken = {
+				symbol: symbol,
+				name: `${symbol} Token`
+			};
+		}
+		
+		// Ensure quote token exists
+		if (!tokenData.quoteToken) {
+			tokenData.quoteToken = { symbol: 'USD' };
+		}
+		
+		// Add common fields if missing
+		if (!tokenData.marketCap) tokenData.marketCap = 1000000;
+		if (!tokenData.fdv) tokenData.fdv = 5000000;
+		if (!tokenData.liquidity) tokenData.liquidity = { usd: 100000 };
+		if (!tokenData.volume) tokenData.volume = { h24: 50000 };
+		if (!tokenData.priceChange) tokenData.priceChange = { h24: 0 };
+		
+		// Ensure social links exist - starting with URL as website
+		if (!tokenData.socialLinks) {
+			tokenData.socialLinks = [];
+			
+			// Add website URL as first social link
+			if (tag.url && tag.url !== '#') {
+				tokenData.socialLinks.push({ 
+					type: 'website', 
+					url: tag.url 
+				});
+			}
+		}
+		
+		// Add info section if missing
+		if (!tokenData.info) {
+			tokenData.info = {
+				description: `${symbol} is a cryptocurrency token.`,
+				imageUrl: `https://cryptologos.cc/logos/${symbol.toLowerCase()}-${symbol.toLowerCase()}-logo.png`
+			};
+		}
+		
+		// Add websites to info if missing
+		if (!tokenData.info.websites) {
+			tokenData.info.websites = [];
+			if (tag.url && tag.url !== '#') {
+				tokenData.info.websites.push({ url: tag.url });
+			}
+		}
+		
+		// Add timestamps if missing
+		if (!tokenData.createdAt) tokenData.createdAt = tag.createdAt || Date.now();
+		if (!tokenData.updatedAt) tokenData.updatedAt = Date.now();
+		
+		// Ensure social links contains all available platforms from info
+		if (tokenData.info) {
+			const socialPlatforms = ['twitter', 'telegram', 'discord', 'github', 'medium', 'youtube', 'reddit', 'facebook', 'instagram'];
+			
+			socialPlatforms.forEach(platform => {
+				if (tokenData.info[platform] && !tokenData.socialLinks.some(link => link.type === platform)) {
+					tokenData.socialLinks.push({
+						type: platform,
+						url: this.getSocialUrl(platform, tokenData.info[platform])
+					});
+				}
+			});
+		}
+		
+		// Limit social links to 6 to prevent scoreboard scrolling
+		if (tokenData.socialLinks.length > 6) {
+			tokenData.socialLinks = tokenData.socialLinks.slice(0, 6);
+		}
+		
+		return tokenData;
 	}
 	
 	/**
@@ -520,115 +647,9 @@ export class TagManager {
 	 * @param {Object} tag - The tag with token data
 	 */
 	displayTokenScoreboard(tag) {
-		if (!tag) return;
-		
-		console.log("Displaying token scoreboard for tag:", tag.name);
-		
-		// Use token data if available, or create minimal info from tag itself
-		const tokenData = tag.tokenData || this.createMinimalTokenData(tag);
-		console.log("Using token data:", tokenData);
-		
-		// Create or update scoreboard element
-		let scoreboard = document.getElementById('token-scoreboard');
-		if (!scoreboard) {
-			scoreboard = document.createElement('div');
-			scoreboard.id = 'token-scoreboard';
-			scoreboard.className = 'token-scoreboard';
-			document.body.appendChild(scoreboard);
-		}
-		
-		// Build the HTML content
-		let htmlContent = `
-			<div class="token-header">
-				<h2>${tokenData.baseToken?.symbol || tag.originalName || tag.name.replace('$', '') || 'Unknown'}</h2>
-				<button class="close-scoreboard">×</button>
-			</div>
-			<div class="token-price">
-				<div>Token: ${tag.name}</div>
-				<div>URL: <a href="${tag.url}" target="_blank">${tag.url}</a></div>
-			</div>
-		`;
-		
-		// Add token data if available
-		if (tokenData.priceUsd || tokenData.priceNative) {
-			htmlContent += `
-				<div class="token-metrics">
-					<div>Price: ${tokenData.priceUsd || 'N/A'}</div>
-					<div>Price (Native): ${tokenData.priceNative || 'N/A'}</div>
-				</div>
-			`;
-		}
-		
-		// Add token pair info
-		if (tokenData.baseToken?.symbol || tokenData.quoteToken?.symbol) {
-			htmlContent += `
-				<div class="token-pair">
-					<div>Pair: ${tokenData.baseToken?.symbol || 'Unknown'} / ${tokenData.quoteToken?.symbol || 'Unknown'}</div>
-					<div>DEX: ${tokenData.dexId || 'Unknown'}</div>
-					<div>Chain: ${tokenData.chainId || 'Unknown'}</div>
-				</div>
-			`;
-		}
-		
-		// Add metrics
-		if (tokenData.liquidity?.usd || tokenData.marketCap || tokenData.fdv) {
-			htmlContent += `
-				<div class="token-metrics">
-					${tokenData.liquidity?.usd ? `<div>Liquidity: $${tokenData.liquidity.usd.toLocaleString()}</div>` : ''}
-					${tokenData.marketCap ? `<div>Market Cap: $${tokenData.marketCap.toLocaleString()}</div>` : ''}
-					${tokenData.fdv ? `<div>FDV: $${tokenData.fdv.toLocaleString()}</div>` : ''}
-				</div>
-			`;
-		}
-		
-		// Basic info if nothing else is available
-		if (!tokenData.priceUsd && !tokenData.liquidity?.usd && !tokenData.marketCap) {
-			htmlContent += `
-				<div class="token-minimal-info">
-					<p>Limited information available for this token.</p>
-					<p>Added to MemeCube: ${new Date(tag.createdAt).toLocaleString()}</p>
-				</div>
-			`;
-		}
-		
-		// Set scoreboard content
-		scoreboard.innerHTML = htmlContent;
-		
-		// Add planets container
-		const planetsContainer = document.createElement('div');
-		planetsContainer.className = 'token-planets';
-		
-		// Always add the tag's URL as a planet
-		if (tag.url && tag.url !== '#') {
-			const planet = this.createPlanet('website', tag.url);
-			planetsContainer.appendChild(planet);
-		}
-		
-		// Add the planets container
-		scoreboard.appendChild(planetsContainer);
-		
-		// Show scoreboard
-		scoreboard.style.display = 'block';
-		
-		// Add event listener for close button
-		const closeButton = scoreboard.querySelector('.close-scoreboard');
-		if (closeButton) {
-			closeButton.addEventListener('click', () => {
-				scoreboard.style.display = 'none';
-			});
-		}
-		
-		// Add event listeners for planets
-		const planets = scoreboard.querySelectorAll('.planet');
-		planets.forEach(planet => {
-			planet.addEventListener('click', (e) => {
-				e.stopPropagation();
-				const url = planet.getAttribute('data-url');
-				if (url) {
-					window.open(url, '_blank');
-				}
-			});
-		});
+		// This method is deprecated and should not be used
+		console.warn('displayTokenScoreboard is deprecated, use TokenScoreboard instead');
+		return;
 	}
 	
 	/**
@@ -742,17 +763,45 @@ export class TagManager {
 	 */
 	createMinimalTokenData(tag) {
 		const symbol = tag.originalName || tag.name.replace('$', '');
+		
+		// Create a more comprehensive token data structure
 		return {
 			baseToken: {
 				symbol: symbol,
 				name: `${symbol} Token`
 			},
+			quoteToken: {
+				symbol: 'USD'
+			},
+			priceUsd: '$0.00',
+			priceChange: {
+				h24: 0
+			},
+			liquidity: {
+				usd: 100000
+			},
+			volume: {
+				h24: 50000
+			},
+			marketCap: 1000000,
+			fdv: 5000000, // Fully diluted valuation
+			dexId: 'Unknown',
+			chainId: 'unknown',
+			// Add social links including the URL as a website planet
+			socialLinks: [
+				{ type: 'website', url: tag.url || '#' }
+			],
+			// Add additional info for TokenScoreboard
 			info: {
+				description: `${symbol} is a cryptocurrency token.`,
 				imageUrl: `https://cryptologos.cc/logos/${symbol.toLowerCase()}-${symbol.toLowerCase()}-logo.png`,
 				websites: [
-					{ url: tag.url }
+					{ url: tag.url || '#' }
 				]
-			}
+			},
+			// Add timestamp for when this token was first seen
+			createdAt: tag.createdAt || Date.now(),
+			updatedAt: Date.now()
 		};
 	}
 } 

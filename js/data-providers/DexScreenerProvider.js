@@ -203,6 +203,8 @@ export class DexScreenerProvider extends TokenDataProvider {
 		
 		try {
 			console.log(`DexScreenerProvider: Fetching market data for ${tokens.length} tokens`);
+			let cacheHits = 0;
+			let apiHits = 0;
 			
 			// Create array of promises for each token's market data
 			const promises = tokens.map(async (token) => {
@@ -216,6 +218,7 @@ export class DexScreenerProvider extends TokenDataProvider {
 				if (cachedPair) {
 					// Use cached data but mark as fetched
 					this.fetchedTokenAddresses.add(`${token.chainId}-${token.tokenAddress}`);
+					cacheHits++;
 					return { ...token, ...cachedPair };
 				}
 				
@@ -230,6 +233,7 @@ export class DexScreenerProvider extends TokenDataProvider {
 					throw new Error(`HTTP error! status: ${response.status}`);
 				}
 				
+				apiHits++;
 				const data = await response.json();
 				
 				// If we got pairs data (should be an array of pairs)
@@ -257,6 +261,9 @@ export class DexScreenerProvider extends TokenDataProvider {
 			// Wait for all promises to resolve
 			const results = await Promise.all(promises);
 			
+			// Log source of token data
+			console.log(`DexScreenerProvider: Data sources - API: ${apiHits}, Cache: ${cacheHits}`);
+			
 			// Filter out null values
 			return results.filter(result => result !== null);
 		} catch (error) {
@@ -273,49 +280,61 @@ export class DexScreenerProvider extends TokenDataProvider {
 	selectTokensForMarketDataUpdate(profiles) {
 		const tokensToUpdate = [];
 		
-		// If this is the first load, we want to fetch data for all available tokens
+		// Process tokens from the latest API fetch
+		console.log(`DexScreenerProvider: Processing ${profiles.length} token profiles for updates`);
+		
 		if (this.isFirstLoad) {
-			console.log(`DexScreenerProvider: First load, selecting all available tokens`);
-			
-			// Take all new tokens for first load
+			console.log(`DexScreenerProvider: First load, selecting all ${profiles.length} tokens for market data update`);
 			for (const token of profiles) {
-				if (token.chainId && token.tokenAddress) {
-					tokensToUpdate.push(token);
-					// Mark as fetched
-					this.fetchedTokenAddresses.add(`${token.chainId}-${token.tokenAddress}`);
-				}
+				if (!token.chainId || !token.tokenAddress) continue;
+				const tokenKey = `${token.chainId}-${token.tokenAddress}`;
+				tokensToUpdate.push(token);
+				this.fetchedTokenAddresses.add(tokenKey);
 			}
-			
 			this.isFirstLoad = false;
+			console.log(`DexScreenerProvider: First load completed`);
 		} else {
-			// Not first load - update a few tokens
-			console.log(`DexScreenerProvider: Regular refresh, selecting ${this.refreshTokenCount} existing tokens plus new ones`);
-			
-			// 1. Process new tokens we haven't seen before
 			for (const token of profiles) {
 				if (!token.chainId || !token.tokenAddress) continue;
 				
 				const tokenKey = `${token.chainId}-${token.tokenAddress}`;
-				if (!this.fetchedTokenAddresses.has(tokenKey)) {
+				// Check if we need to fetch market data (not in cache or cache expired)
+				const cachedData = this.getCachedTokenPair(token.chainId, token.tokenAddress);
+				if (!cachedData) {
 					tokensToUpdate.push(token);
-					this.fetchedTokenAddresses.add(tokenKey);
-					console.log(`Added new token for update: ${tokenKey}`);
+					console.log(`Added token for update (no or expired cache): ${tokenKey}`);
 				}
+				// Mark as seen, even if using cached data
+				this.fetchedTokenAddresses.add(tokenKey);
 			}
 			
-			// 2. Add a few random tokens from our existing collection for refresh
+			// If not the first load, refresh a few existing tokens
+			console.log(`DexScreenerProvider: Regular refresh, selecting up to ${this.refreshTokenCount} additional tokens`);
+			
 			if (this.tokenData.length > 0) {
 				const randomCount = Math.min(this.refreshTokenCount, this.tokenData.length);
 				const indexes = new Set();
 				
-				// Get random indexes to update
 				while (indexes.size < randomCount) {
 					indexes.add(Math.floor(Math.random() * this.tokenData.length));
 				}
 				
-				// Add randomly selected tokens to update list
 				for (const index of indexes) {
-					tokensToUpdate.push(this.tokenData[index]);
+					const token = this.tokenData[index];
+					const tokenKey = `${token.chainId}-${token.tokenAddress}`;
+					
+					// Remove from cache to force fresh data fetch
+					if (token.chainId && token.tokenAddress) {
+						const cacheKey = `${token.chainId}-${token.tokenAddress}`;
+						if (this.tokenPairCache.has(cacheKey)) {
+							this.tokenPairCache.delete(cacheKey);
+							console.log(`Removed token from cache to force refresh: ${cacheKey}`);
+						}
+					}
+					
+					if (!tokensToUpdate.some(t => `${t.chainId}-${t.tokenAddress}` === tokenKey)) {
+						tokensToUpdate.push(token);
+					}
 				}
 			}
 		}
@@ -362,9 +381,12 @@ export class DexScreenerProvider extends TokenDataProvider {
 		try {
 			console.log("DexScreenerProvider: Refreshing token data...");
 			
-			// Get token profiles
+			// Always get the latest token profiles from API to ensure our token list is current
 			const profiles = await this.fetchLatestTokenProfiles();
-			console.log(`DexScreenerProvider: Fetched ${profiles.length} token profiles`);
+			console.log(`DexScreenerProvider: Fetched ${profiles.length} token profiles from API`);
+			
+			// Update our master token list with the latest profiles
+			this.tokenProfiles = profiles;
 			
 			// Select which tokens to fetch market data for
 			const tokensToUpdate = this.selectTokensForMarketDataUpdate(profiles);
@@ -372,7 +394,7 @@ export class DexScreenerProvider extends TokenDataProvider {
 			
 			// Fetch market data for selected tokens
 			const updatedTokens = await this.fetchTokenMarketData(tokensToUpdate);
-			console.log(`DexScreenerProvider: Fetched market data for ${updatedTokens.length} tokens`);
+			console.log(`DexScreenerProvider: Updated market data for ${updatedTokens.length} tokens (from cache and/or API)`);
 			
 			// Update existing token data with the new market data
 			this.updateTokenDataWithNewMarketData(updatedTokens);
