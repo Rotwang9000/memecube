@@ -239,3 +239,40 @@ The new tag interaction system uses a more robust physics-based approach:
 - `TagSystemDemo.js` - Demonstration of the tag system capabilities
 
 The physics-based approach provides more realistic and stable tag interactions while maintaining the core visual concept.
+
+## UI Enhancements - May 2023
+
+### Pop-up Notifications for New Tokens
+The system now displays pop-up notifications for new tokens appearing in the cube. These notifications:
+- Appear in the bottom right corner
+- Show the token symbol
+- Auto-dismiss after 5 seconds
+- Are clickable to show detailed token information in the scoreboard
+- Stack vertically if multiple tokens appear simultaneously
+
+This provides better visibility when new tokens are added to the cube, whether from API updates or user submissions.
+
+### Improved Message Handling
+- System messages (like "Removed X tokens from the cube") now remain visible for 5 seconds instead of 3, giving users more time to read them.
+- All temporary messages use a fade-in/fade-out animation for a smoother user experience.
+
+## 3D Coordinate System Notes
+
+When working with the 3D visualizations in this project (particularly the token scoreboard), be aware of the following coordinate system conventions:
+
+### Z-Axis Orientation
+- **NEGATIVE Z values** bring objects FORWARD (toward the camera)
+- **POSITIVE Z values** push objects BACK (away from the camera)
+- Use z-index values between -0.5 and -2.0 to ensure elements are visible in front of the scoreboard
+
+### After Rotation (For X/Y Positioning)
+- **RIGHT side** will have **POSITIVE X** values
+- **LEFT side** will have **NEGATIVE X** values
+- **TOP side** will have **POSITIVE Y** values
+- **BOTTOM side** will have **NEGATIVE Y** values
+
+### Render Order
+- Use higher `renderOrder` values (10-20) for elements that should appear in front
+- This works alongside Z-positioning to ensure proper layering
+
+Developers frequently get confused by the Z-axis orientation because it's counterintuitive - remember that **more negative Z values bring objects closer to the viewer**.

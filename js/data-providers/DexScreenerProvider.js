@@ -20,16 +20,20 @@ export class DexScreenerProvider extends TokenDataProvider {
 		this.tokenProfiles = [];
 		this.maxTokensToStore = 100;
 		
+		// Track tokens by page
+		this.tokensByPage = new Map();
+		this.currentPage = 'dexscreener/latest';
+		
 		// Initial load configuration
 		this.isFirstLoad = true;
 		this.refreshTokenCount = 2;      // Get 2 tokens on regular refresh
 		
 		// Set refresh rate for token data
-		this.fetchInterval = 15000; // 6 seconds
+		this.fetchInterval = 6000; // 6 seconds
 		
-		// Token pair data cache
+		// Token pair data cache (individual token pair details, NOT the full token list)
 		this.tokenPairCache = new Map();
-		this.cacheExpiryTime = 15 * 60 * 1000; // 15 minutes
+		this.cacheExpiryTime = 5 * 60 * 1000; // 5 minutes for token pair data
 		
 		// Track which tokens have already had market data fetched
 		this.fetchedTokenAddresses = new Set();
@@ -38,8 +42,31 @@ export class DexScreenerProvider extends TokenDataProvider {
 		this.lastCacheSave = 0;
 		this.cacheSaveInterval = 60 * 1000; // 1 minute
 		
-		// Try to load cache from localStorage on initialization
+		// Clear any outdated cache on initialization to ensure fresh data
+		this.clearOutdatedCache();
+		
+		// Try to load cache from localStorage on initialization for token pair data only
 		this.loadCacheFromStorage();
+	}
+	
+	/**
+	 * Clear any outdated cache from localStorage to ensure we start with fresh data for token pairs
+	 */
+	clearOutdatedCache() {
+		try {
+			const cachedData = localStorage.getItem('tokenPairCache');
+			if (cachedData) {
+				const parsedCache = JSON.parse(cachedData);
+				const now = Date.now();
+				// Clear cache if it's older than 5 minutes
+				if (now - parsedCache.timestamp > this.cacheExpiryTime) {
+					console.log('DexScreenerProvider: Clearing outdated token pair cache from localStorage');
+					localStorage.removeItem('tokenPairCache');
+				}
+			}
+		} catch (error) {
+			console.error('Error clearing outdated cache:', error);
+		}
 	}
 	
 	/**
@@ -69,7 +96,7 @@ export class DexScreenerProvider extends TokenDataProvider {
 	}
 	
 	/**
-	 * Load the cache from localStorage
+	 * Load the cache from localStorage for token pair data only
 	 */
 	loadCacheFromStorage() {
 		try {
@@ -79,9 +106,9 @@ export class DexScreenerProvider extends TokenDataProvider {
 			const parsedCache = JSON.parse(cachedData);
 			const now = Date.now();
 			
-			// Check if overall cache is expired (older than 24 hours)
-			if (now - parsedCache.timestamp > 600000) {
-				console.log('DexScreenerProvider: Cache in localStorage is older than 10 minutes, discarding');
+			// Check if overall cache is expired (older than 5 minutes for token pair data)
+			if (now - parsedCache.timestamp > this.cacheExpiryTime) {
+				console.log('DexScreenerProvider: Cache in localStorage is older than 5 minutes, discarding');
 				localStorage.removeItem('tokenPairCache');
 				return;
 			}
@@ -371,6 +398,79 @@ export class DexScreenerProvider extends TokenDataProvider {
 		}
 	}
 	
+	/**
+	 * Get tokens by page identifier
+	 * @param {string} pageId The page identifier (e.g., 'dexscreener/latest')
+	 * @returns {Promise<Array>} Array of tokens for the requested page
+	 */
+	async getTokensByPage(pageId = 'dexscreener/latest') {
+		// Set as current page
+		this.currentPage = pageId;
+		
+		// Check if we already have tokens for this page
+		if (this.tokensByPage.has(pageId) && this.tokensByPage.get(pageId).length > 0) {
+			return this.tokensByPage.get(pageId);
+		}
+		
+		// Handle different page types
+		if (pageId === 'dexscreener/latest') {
+			// Fetch latest token profiles
+			const profiles = await this.fetchLatestTokenProfiles();
+			
+			// Fetch market data for these profiles
+			const tokensWithData = await this.fetchTokenMarketData(profiles);
+			
+			// Store in our page map
+			this.tokensByPage.set(pageId, tokensWithData);
+			
+			// Also update our main token data store
+			this.updateTokenDataWithNewMarketData(tokensWithData);
+			
+			return tokensWithData;
+		}
+		
+		// For future page types, add more handlers here
+		
+		// Default: return empty array if page type not recognized
+		return [];
+	}
+	
+	/**
+	 * Get tokens for the current page
+	 * @returns {Promise<Array>} Array of token data for current page
+	 */
+	async getCurrentPageTokens() {
+		// Get the current page data
+		if (!this.tokensByPage.has(this.currentPage) || this.tokensByPage.get(this.currentPage).length === 0) {
+			await this.updateCurrentPageTokens();
+		}
+		
+		// Return tokens for the current page
+		const tokens = this.tokensByPage.get(this.currentPage) || [];
+		
+		// Add metadata to identify these tokens as coming from the provider
+		return tokens.map(token => ({
+			...token,
+			_metadata: {
+				source: 'dexscreener',
+				page: this.currentPage,
+				fetchedAt: Date.now()
+			}
+		}));
+	}
+	
+	/**
+	 * Update tokens for the current page
+	 * @returns {Promise<Array>} Updated tokens for the current page
+	 */
+	async updateCurrentPageTokens() {
+		// Clear the current page from cache to force refresh
+		this.tokensByPage.delete(this.currentPage);
+		
+		// Fetch fresh tokens for the current page
+		return this.getTokensByPage(this.currentPage);
+	}
+	
 	// --- TokenDataProvider Interface Implementation ---
 	
 	/**
@@ -381,15 +481,18 @@ export class DexScreenerProvider extends TokenDataProvider {
 		try {
 			console.log("DexScreenerProvider: Refreshing token data...");
 			
-			// Always get the latest token profiles from API to ensure our token list is current
-			const profiles = await this.fetchLatestTokenProfiles();
-			console.log(`DexScreenerProvider: Fetched ${profiles.length} token profiles from API`);
+			// Update the current page tokens
+			const currentPageTokens = await this.updateCurrentPageTokens();
 			
-			// Update our master token list with the latest profiles
-			this.tokenProfiles = profiles;
+			// // Always get the latest token profiles from API to ensure our token list is current
+			// const profiles = await this.fetchLatestTokenProfiles();
+			// console.log(`DexScreenerProvider: Fetched ${profiles.length} token profiles from API`);
+			
+			// // Update our master token list with the latest profiles
+			// this.tokenProfiles = profiles;
 			
 			// Select which tokens to fetch market data for
-			const tokensToUpdate = this.selectTokensForMarketDataUpdate(profiles);
+			const tokensToUpdate = this.selectTokensForMarketDataUpdate(currentPageTokens);
 			console.log(`DexScreenerProvider: Selected ${tokensToUpdate.length} tokens for market data update`);
 			
 			// Fetch market data for selected tokens
@@ -407,10 +510,10 @@ export class DexScreenerProvider extends TokenDataProvider {
 			// Save cache periodically
 			this.saveCacheToStorage();
 			
-			// Notify callbacks with updated data
-			this.notifyCallbacks(this.tokenData);
+			// Notify callbacks with current page tokens
+			this.notifyCallbacks(currentPageTokens);
 			
-			return this.tokenData;
+			return currentPageTokens;
 		} catch (error) {
 			console.error('Error refreshing DexScreener data:', error);
 			return this.tokenData;
@@ -500,15 +603,17 @@ export class DexScreenerProvider extends TokenDataProvider {
 	/**
 	 * Get all available token data
 	 * @returns {Array} All available token data
+	 * @deprecated Use getCurrentPageTokens() instead for async token retrieval
 	 */
 	getAllTokenData() {
+		console.warn('getAllTokenData() is deprecated, use getCurrentPageTokens() instead for async token retrieval');
 		return [...this.tokenData];
 	}
 	
 	/**
 	 * Calculate a visual size for a token based on its market cap and volume
 	 * @param {Object} token Token to calculate size for
-	 * @returns {number} Size value between 0.5 and 2.0
+	 * @returns {number} Size value based on a reference scale of 0.5 to 2.0
 	 */
 	calculateTokenSize(token) {
 		if (!token) return 0.7; // Default size
@@ -519,18 +624,18 @@ export class DexScreenerProvider extends TokenDataProvider {
 			// If no market cap, use volume-based sizing
 			const volume = parseFloat(token.volume?.h24 || 0);
 			if (volume > 0) {
-				// Map volume to size (0.5 - 1.5)
+				// Map volume to size (reference scale 0.5 - 1.5)
 				const volumeSizeScale = Math.log10(volume) / 8; // Log scale
-				return 0.5 + Math.min(1.0, volumeSizeScale);
+				return 0.5 + volumeSizeScale;
 			}
 			return 0.7; // Default size
 		}
 		
 		// Map market cap to size using logarithmic scale
 		// This gives better distribution across wide market cap ranges
-		// Small cap: 0.5-0.8, Mid cap: 0.8-1.2, Large cap: 1.2-2.0
+		// Reference scale - Small cap: 0.5-0.8, Mid cap: 0.8-1.2, Large cap: 1.2-2.0
 		const sizeScale = Math.log10(marketCap) / 8;
-		return 0.5 + Math.min(1.5, sizeScale);
+		return 0.5 + sizeScale;
 	}
 	
 	/**

@@ -1,6 +1,6 @@
 /**
  * TagsManager - High-level compatibility wrapper for backward compatibility with the old system
- * Handles tag aging, demo functionality, and provides a consistent API
+ * Handles tag sorting, demo functionality, and provides a consistent API
  */
 
 import { TagManager } from '../tag-manager.js';
@@ -23,9 +23,11 @@ export class TagsManager {
 		// Reference tags directly from the TagManager for compatibility
 		this.tags = this.tagManager.tags;
 		
-		// Track tag age for resizing
-		this.lastAgeUpdateTime = Date.now();
-		this.ageUpdateInterval = options.ageUpdateInterval || 30000; // 30 seconds
+		// For tracking last update time
+		this.lastUpdateTime = Date.now();
+		
+		// Store reference to VisualizationManager (to be set later)
+		this.visualizationManager = null;
 		
 		// Demo functionality
 		this.demoActive = false;
@@ -37,14 +39,89 @@ export class TagsManager {
 	}
 	
 	/**
+	 * Set visualization manager reference
+	 * @param {Object} visualizationManager - Reference to the VisualizationManager
+	 */
+	setVisualizationManager(visualizationManager) {
+		if (!visualizationManager) {
+			console.warn('Attempted to set null VisualizationManager to TagsManager');
+			return;
+		}
+		
+		// Store reference
+		this.visualizationManager = visualizationManager;
+		
+		// Ensure the reference is strong by storing it in a property that won't be garbage collected
+		this._permanentVisualizationManagerRef = visualizationManager;
+		
+		// Pass it to the tagManager
+		if (this.tagManager) {
+			this.tagManager.setVisualizationManager(visualizationManager);
+			
+			// Double-check success
+			if (!this.tagManager.visualizationManager) {
+				console.error('Failed to set VisualizationManager in TagManager!');
+			}
+		} else {
+			console.error('TagManager not available in TagsManager');
+		}
+		
+		console.log('VisualizationManager set for TagsManager and TagManager');
+	}
+	
+	/**
+	 * Get the visualization manager, recovering it if needed
+	 * @returns {Object|null} The visualization manager or null if not found
+	 */
+	getVisualizationManager() {
+		// Return existing reference if available
+		if (this.visualizationManager) {
+			return this.visualizationManager;
+		}
+		
+		// Try to recover from permanent reference
+		if (this._permanentVisualizationManagerRef) {
+			console.log('Recovering VisualizationManager from permanent reference');
+			this.visualizationManager = this._permanentVisualizationManagerRef;
+			
+			// Re-establish connection to TagManager
+			if (this.tagManager && !this.tagManager.visualizationManager) {
+				this.tagManager.setVisualizationManager(this.visualizationManager);
+			}
+			
+			return this.visualizationManager;
+		}
+		
+		// Try to recover from global scope
+		if (window.memeCube && window.memeCube.visualizationManager) {
+			console.log('Recovering VisualizationManager from window.memeCube');
+			this.visualizationManager = window.memeCube.visualizationManager;
+			
+			// Store in permanent reference
+			this._permanentVisualizationManagerRef = this.visualizationManager;
+			
+			// Re-establish connection to TagManager
+			if (this.tagManager && !this.tagManager.visualizationManager) {
+				this.tagManager.setVisualizationManager(this.visualizationManager);
+			}
+			
+			return this.visualizationManager;
+		}
+		
+		console.error('Failed to recover VisualizationManager reference');
+		return null;
+	}
+	
+	/**
 	 * Add a new tag
 	 * @param {string} text - Tag text (without $ prefix)
 	 * @param {string} url - URL to navigate to when clicked
 	 * @param {number} size - Size of the tag (0.5-2.0)
 	 * @param {Object} tokenData - Token data for the tag
+	 * @param {Object} metadata - Additional metadata for tracking
 	 * @returns {Promise<Object|null>} - Created tag or null
 	 */
-	async addTag(text, url, size = null, tokenData = null) {
+	async addTag(text, url, size = null, tokenData = null, metadata = {}) {
 		// Ensure text doesn't have $ prefix (will be added by TagManager)
 		const tagText = text.startsWith('$') ? text.substring(1) : text;
 		
@@ -54,13 +131,26 @@ export class TagsManager {
 		// Create the tag
 		const tag = this.tagManager.createTag(tagText, url, {
 			scale: finalSize,
-			size: 0.5 // Base text size before scaling
+			size: 0.5, // Base text size before scaling
+			source: metadata.source || 'userAdded'
 		}, tokenData);
+		
+		// Ensure the tagManager has a visualization manager reference
+		if (!this.tagManager.visualizationManager) {
+			// Get visualization manager using recovery methods
+			const visualizationManager = this.getVisualizationManager();
+			if (visualizationManager) {
+				console.log('Recovered VisualizationManager for tag:', tagText);
+				this.tagManager.setVisualizationManager(visualizationManager);
+			} else {
+				console.warn('Could not recover VisualizationManager for tag:', tagText);
+			}
+		}
 		
 		// Update references
 		this.tags = this.tagManager.tags;
 		
-		// Add age tracking
+		// Add creation time
 		if (tag) {
 			tag.creationTime = Date.now();
 			this.sortTagsByAge();
@@ -107,57 +197,6 @@ export class TagsManager {
 	sortTagsByAge() {
 		// Sort by creation time (oldest first)
 		this.tags.sort((a, b) => (a.creationTime || 0) - (b.creationTime || 0));
-	}
-	
-	/**
-	 * Update tag sizes based on age
-	 */
-	updateTagSizesByAge() {
-		const now = Date.now();
-		
-		// Only update periodically for performance
-		if (now - this.lastAgeUpdateTime < this.ageUpdateInterval) return;
-		
-		this.lastAgeUpdateTime = now;
-		
-		// Sort tags by age
-		this.sortTagsByAge();
-		
-		// Update each tag's size
-		for (let i = 0; i < this.tags.length; i++) {
-			const tag = this.tags[i];
-			
-			// Calculate age position (0 = oldest, 1 = newest)
-			const agePosition = i / Math.max(1, this.tags.length - 1);
-			
-			// Get original size from options or default to current size
-			const originalSize = tag.options?.scale || tag.mesh.scale.x;
-			
-			// Calculate new size based on age
-			const newSize = this.calculateSizeByAge(originalSize, agePosition);
-			
-			// Apply new size if significantly different
-			if (Math.abs(newSize - tag.mesh.scale.x) / tag.mesh.scale.x > 0.05) {
-				this.tagManager.resizeTag(tag.id, newSize);
-			}
-		}
-	}
-	
-	/**
-	 * Calculate tag size based on age
-	 * @param {number} originalSize - Original tag size
-	 * @param {number} agePosition - Age position (0-1, 0=oldest, 1=newest)
-	 * @returns {number} - New size
-	 */
-	calculateSizeByAge(originalSize, agePosition) {
-		// Older tags should be smaller
-		// For the oldest tag (agePosition = 0), size is reduced to 40%
-		// For the newest tag (agePosition = 1), size stays at 100%
-		const minSizeFactor = 0.4;
-		const sizeFactor = minSizeFactor + (1 - minSizeFactor) * agePosition;
-		
-		// Calculate new size but don't go below minimum
-		return Math.max(0.2, originalSize * sizeFactor);
 	}
 	
 	/**
@@ -316,9 +355,6 @@ export class TagsManager {
 	update() {
 		// Update tag manager
 		this.tagManager.update();
-		
-		// Update tag sizes based on age
-		this.updateTagSizesByAge();
 	}
 	
 	/**
@@ -354,4 +390,4 @@ export class TagsManager {
 		// Dispose of tag manager
 		this.tagManager.dispose();
 	}
-} 
+}

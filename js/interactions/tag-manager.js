@@ -22,6 +22,11 @@ export class TagManager {
 		this.camera = camera;
 		this.visualizationManager = visualizationManager;
 		
+		// Log if visualization manager is already available
+		if (visualizationManager) {
+			console.log('TagManager created with VisualizationManager already set');
+		}
+		
 		// Configuration
 		this.options = {
 			fontPath: `/fonts/${['shmup.json', 'freshman.json', 'heysei.json'][Math.floor(Math.random() * 3)]}`,
@@ -70,8 +75,19 @@ export class TagManager {
 	 * @param {Object} visualizationManager - Reference to VisualizationManager
 	 */
 	setVisualizationManager(visualizationManager) {
+		if (!visualizationManager) {
+			console.warn('Attempted to set null VisualizationManager');
+			return;
+		}
+		
 		this.visualizationManager = visualizationManager;
-		console.log('VisualizationManager set for TagManager');
+		
+		// Verify scoreboard is available
+		if (this.visualizationManager.tokenScoreboard) {
+			console.log('VisualizationManager with tokenScoreboard set for TagManager');
+		} else {
+			console.warn('VisualizationManager set but tokenScoreboard not available');
+		}
 	}
 	
 	/**
@@ -144,7 +160,8 @@ export class TagManager {
 		
 		console.log(`Creating tag: ${name} with URL: ${url}`);
 		if (tokenData) {
-			console.log(`Tag has token data:`, tokenData);
+			// Log condensed token data to avoid overwhelming the console
+			console.log(`Tag has token data (symbol: ${tokenData.baseToken?.symbol || name})`);
 		} else {
 			console.log(`Tag has no token data`);
 		}
@@ -223,7 +240,12 @@ export class TagManager {
 			color: options.color ? new THREE.Color(options.color) : color.clone(),
 			createdAt: Date.now(),
 			options,
-			tokenData // Store token data for scoreboard display
+			tokenData, // Store token data for scoreboard display
+			metadata: {
+				isToken: !!tokenData,
+				addedAt: Date.now(),
+				source: options.source || 'manual',
+			}
 		};
 		
 		console.log(`Created tag with ID: ${id}, name: ${displayName}, hasTokenData: ${!!tokenData}`);
@@ -324,7 +346,8 @@ export class TagManager {
 			name: tag.name,
 			originalName: tag.originalName,
 			url: tag.url,
-			hasTokenData: !!tag.tokenData
+			hasTokenData: !!tag.tokenData,
+			source: tag.metadata?.source
 		});
 		
 		// Update lastInteractionTime
@@ -333,10 +356,24 @@ export class TagManager {
 		// Animate the tag (pulse)
 		this.pulseTag(tag);
 		
-		// Check if VisualizationManager exists
+		// Verify we have the VisualizationManager reference - try to locate it if missing
 		if (!this.visualizationManager) {
-			console.warn('VisualizationManager not available for tag click');
-			return;
+			console.warn(`VisualizationManager reference missing for tag: ${tag.name}`);
+			
+			// Try to locate from global scope as last resort
+			if (window.memeCube && window.memeCube.visualizationManager) {
+				console.log('Recovering VisualizationManager from window.memeCube');
+				this.visualizationManager = window.memeCube.visualizationManager;
+			} else {
+				console.error('Cannot find VisualizationManager anywhere - tag click cannot display token info');
+				
+				// Still show a basic URL if available
+				if (tag.url && tag.url !== '#') {
+					console.log(`Tag has URL: ${tag.url} - could open in new window`);
+					// Optionally open URL: window.open(tag.url, '_blank');
+				}
+				return;
+			}
 		}
 		
 		// Log scoreboard existence state
@@ -355,12 +392,20 @@ export class TagManager {
 		console.log('Prepared token data for display:', tokenData);
 		
 		// Try to use the scoreboard from visualizationManager
-		if (this.visualizationManager.tokenScoreboard) {
+		const scoreboard = this.visualizationManager?.tokenScoreboard;
+		if (scoreboard) {
 			console.log('Using tokenScoreboard from VisualizationManager');
 			try {
-				// Update token data and display scoreboard
-				this.visualizationManager.tokenScoreboard.updateTokenData([tokenData]);
-				this.visualizationManager.tokenScoreboard.toggleVisibility(true);
+				if (typeof scoreboard.showTokenDetail === 'function') {
+					scoreboard.showTokenDetail(tokenData);
+				} else {
+					// Fallback to old behaviour
+					scoreboard.updateTokenData([tokenData]);
+				}
+				// Ensure scoreboard is visible
+				if (!scoreboard.isVisible) {
+					scoreboard.toggleVisibility(true);
+				}
 			} catch (error) {
 				console.error('Error displaying token scoreboard:', error);
 			}

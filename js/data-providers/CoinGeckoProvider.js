@@ -186,7 +186,7 @@ export class CoinGeckoProvider extends TokenDataProvider {
 	 * Calculate a normalized size value for a token based on its market metrics
 	 * Used for visualizations like the token cube
 	 * @param {Object} token Token data
-	 * @returns {number} Normalized size value (0.5 to 2.0)
+	 * @returns {number} Size value based on a reference scale of 0.5 to 2.0
 	 */
 	calculateTokenSize(token) {
 		// Base size
@@ -195,14 +195,14 @@ export class CoinGeckoProvider extends TokenDataProvider {
 		// Adjust by volume
 		const volumeUsd = parseFloat(token.volume?.h24 || 0);
 		if (volumeUsd > 0) {
-			const volumeFactor = Math.min(Math.log10(volumeUsd) / 10, 1);
+			const volumeFactor = Math.log10(volumeUsd) / 10;
 			size += volumeFactor * 0.5;
 		}
 		
 		// Adjust by price change
 		const priceChange = Math.abs(parseFloat(token.priceChange?.h24 || 0));
 		if (priceChange > 0) {
-			const changeFactor = Math.min(priceChange / 100, 1);
+			const changeFactor = priceChange / 100;
 			size += changeFactor * 0.5;
 		}
 		
@@ -211,8 +211,8 @@ export class CoinGeckoProvider extends TokenDataProvider {
 			size += 0.3; // Boost size for top 10 coins
 		}
 		
-		// Cap size between 0.5 and 2.0
-		return Math.max(0.5, Math.min(size, 2.0));
+		// Return the calculated size without clamping
+		return size;
 	}
 	
 	/**

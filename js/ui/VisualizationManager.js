@@ -25,6 +25,9 @@ export class VisualizationManager {
 		// Setup 3D visualizations if scene is provided
 		if (this.scene && this.camera && this.tagsManager) {
 			this.setupVisualizations();
+			
+			// Establish bidirectional connection with TagsManager
+			this.establishTagManagerConnection();
 		}
 		
 		// Create UI elements
@@ -35,14 +38,18 @@ export class VisualizationManager {
 			this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
 			this.dataProvider.startAutoRefresh();
 		}
+
+		// --- New Token Popup System ---
+		this._lastTokenKeys = new Set();
+		this._newTokenPopups = new Map();
 	}
 	
 	/**
 	 * Setup 3D visualizations (scoreboard, chart, and tag cluster)
 	 */
 	setupVisualizations() {
-		// Create token scoreboard
-		this.tokenScoreboard = new TokenScoreboard(this.scene, this.camera);
+		// Create token scoreboard with data provider for refreshing token details
+		this.tokenScoreboard = new TokenScoreboard(this.scene, this.camera, this.dataProvider);
 		
 		// Create token chart
 		this.tokenChart = new TokenChart3D(this.scene, this.camera);
@@ -80,11 +87,29 @@ export class VisualizationManager {
 			this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
 			
 			// If we already have token data, update the cluster now
-			const existingData = this.dataProvider.getAllTokenData();
-			if (existingData && existingData.length > 0) {
-				console.log("Using existing data to initialize visualizations:", existingData.length, "tokens");
-				this.tokenCluster.updateTokens(existingData);
-			}
+			this.initializeTokenCluster();
+		}
+
+		// After cluster is created, set up callback for new tokens
+		if (this.tokenCluster) {
+			this.tokenCluster.setUpdateCallback((tokens, tokenTags) => {
+				// Only show popups if not first update
+				if (this.tokenCluster.firstUpdate) return;
+
+				const currentKeys = new Set(tokenTags.keys());
+				const prevKeys = this._lastTokenKeys || new Set();
+				const newKeys = Array.from(currentKeys).filter(k => !prevKeys.has(k));
+
+				for (const key of newKeys) {
+					const tagId = tokenTags.get(key);
+					const tag = this.tokenCluster.tagManager.tags.find(t => t.id === tagId);
+					const token = tag?.token || null;
+					if (token && tag) {
+						this.showNewTokenPopup(token, tag);
+					}
+				}
+				this._lastTokenKeys = currentKeys;
+			});
 		}
 	}
 	
@@ -356,18 +381,21 @@ export class VisualizationManager {
 		this.isModalOpen = true;
 		
 		// If we have a data provider but no data yet, fetch it
-		if (this.dataProvider && this.dataProvider.getAllTokenData().length === 0) {
-			await this.dataProvider.refreshData();
+		if (this.dataProvider) {
+			const tokens = await this.dataProvider.getCurrentPageTokens();
+			if (tokens.length === 0) {
+				await this.dataProvider.refreshData();
+			}
 		}
 		
 		// Update token list content
-		this.updateTokenListContent();
+		await this.updateTokenListContent();
 	}
 	
 	/**
 	 * Update token list content in the modal
 	 */
-	updateTokenListContent() {
+	async updateTokenListContent() {
 		if (!this.isModalOpen) return;
 		
 		const container = document.getElementById('token-list-container');
@@ -377,7 +405,7 @@ export class VisualizationManager {
 		container.innerHTML = '';
 		
 		// Get token data if we have a provider
-		const tokens = this.dataProvider ? this.dataProvider.getAllTokenData() : [];
+		const tokens = this.dataProvider ? await this.dataProvider.getCurrentPageTokens() : [];
 		
 		if (tokens.length === 0) {
 			container.innerHTML = '<p>No token data available. Click refresh to fetch data.</p>';
@@ -581,6 +609,13 @@ export class VisualizationManager {
 		// Only update visualizations if they're visible
 		if (!this.showVisualizations) return;
 		
+		// Check if visualizationManager connection is intact
+		// This is critical to ensure tag clicks always work
+		if (this.tagsManager && (!this.tagsManager.visualizationManager || !this.tagsManager.tagManager.visualizationManager)) {
+			console.warn('Detected broken VisualizationManager connection, repairing...');
+			this.establishTagManagerConnection();
+		}
+		
 		// Update token scoreboard
 		if (this.tokenScoreboard) {
 			// Only call updateScreenPosition when camera movement starts or stops
@@ -712,5 +747,147 @@ export class VisualizationManager {
 		}
 		
 		this.utils.showTemporaryMessage('Demo token data loaded!');
+	}
+	
+	/**
+	 * Initialize token cluster visualization
+	 */
+	async initializeTokenCluster() {
+		console.log("Initializing token cluster visualization");
+
+		if (!this.dataProvider) {
+			console.warn("No data provider available for token cluster");
+			return;
+		}
+		
+		// Ensure the callback is set before any tokens are processed
+		if (this.tokenCluster && !this.tokenCluster.updateCallback) {
+			this.tokenCluster.setUpdateCallback((tokens, tokenTags) => {
+				// Only show popups if not first update
+				if (this.tokenCluster.firstUpdate) return;
+
+				const currentKeys = new Set(tokenTags.keys());
+				const prevKeys = this._lastTokenKeys || new Set();
+				const newKeys = Array.from(currentKeys).filter(k => !prevKeys.has(k));
+
+				for (const key of newKeys) {
+					const tagId = tokenTags.get(key);
+					const tag = this.tokenCluster.tagManager.tags.find(t => t.id === tagId);
+					const token = tag?.token || null;
+					if (token && tag) {
+						this.showNewTokenPopup(token, tag);
+					}
+				}
+				this._lastTokenKeys = currentKeys;
+			});
+		}
+		
+		try {
+			// If we already have token data, update the cluster now
+			const existingData = await this.dataProvider.getCurrentPageTokens();
+			if (existingData && existingData.length > 0) {
+				console.log("Using existing data to initialize visualizations:", existingData.length, "tokens");
+				if (this.tokenCluster) {
+					this.tokenCluster.updateTokens(existingData);
+				}
+			}
+		} catch (error) {
+			console.error("Error initializing token cluster:", error);
+		}
+	}
+	
+	/**
+	 * Establish a strong bidirectional connection with the TagsManager
+	 * This ensures that all tags can access the visualization manager
+	 */
+	establishTagManagerConnection() {
+		if (!this.tagsManager) {
+			console.warn('Cannot establish connection: TagsManager not available');
+			return false;
+		}
+		
+		// Set reference in the TagsManager
+		console.log('VisualizationManager establishing connection with TagsManager');
+		
+		// Set this instance in the tagsManager
+		this.tagsManager.setVisualizationManager(this);
+		
+		// Store a persistent reference to reach the TagManager
+		this.tagManager = this.tagsManager.tagManager;
+		
+		// Double-check the connection
+		const connectionSuccessful = (
+			this.tagsManager.visualizationManager === this &&
+			this.tagsManager.tagManager.visualizationManager === this
+		);
+		
+		if (connectionSuccessful) {
+			console.log('VisualizationManager successfully connected to TagsManager and TagManager');
+		} else {
+			console.error('Failed to establish proper connections with TagsManager!');
+			console.log('- TagsManager has VisualizationManager:', !!this.tagsManager.visualizationManager);
+			console.log('- TagManager has VisualizationManager:', !!this.tagsManager.tagManager.visualizationManager);
+		}
+		
+		return connectionSuccessful;
+	}
+
+	/**
+	 * Show a popup for a new token, clickable to show info in the scoreboard
+	 * @param {Object} token - The token data
+	 * @param {Object} tag - The tag object
+	 */
+	showNewTokenPopup(token, tag) {
+		const key = `${token.chainId || 'eth'}-${token.tokenAddress || token.baseToken?.address || token.baseToken?.symbol || token.symbol || tag.id}`;
+		if (this._newTokenPopups.has(key)) return; // Only one popup per token
+
+		const popup = document.createElement('div');
+		popup.className = 'new-token-popup';
+		popup.style.position = 'fixed';
+		popup.style.bottom = `${60 + this._newTokenPopups.size * 56}px`;
+		popup.style.right = '30px';
+		popup.style.background = 'linear-gradient(90deg, #0ff 0%, #09f 100%)';
+		popup.style.color = '#222';
+		popup.style.padding = '14px 22px';
+		popup.style.borderRadius = '8px';
+		popup.style.boxShadow = '0 4px 16px rgba(0,0,0,0.18)';
+		popup.style.fontWeight = 'bold';
+		popup.style.fontSize = '1.1em';
+		popup.style.zIndex = 1200;
+		popup.style.cursor = 'pointer';
+		popup.style.transition = 'opacity 0.3s';
+		popup.style.opacity = '0';
+		popup.style.marginBottom = '8px';
+		popup.innerHTML = `🆕 New token: <span style="color:#005">${token.baseToken?.symbol || token.symbol || 'TOKEN'}</span> added!<br><span style="font-size:0.9em;font-weight:normal;">Click for details</span>`;
+
+		// Fade in
+		setTimeout(() => { popup.style.opacity = '1'; }, 10);
+
+		// Click handler: show in scoreboard
+		popup.onclick = (e) => {
+			e.preventDefault();
+			if (this.tokenScoreboard && typeof this.tokenScoreboard.showTokenDetail === 'function') {
+				this.tokenScoreboard.showTokenDetail(token);
+			}
+			popup.style.opacity = '0';
+			setTimeout(() => {
+				if (popup.parentNode) popup.parentNode.removeChild(popup);
+				this._newTokenPopups.delete(key);
+			}, 300);
+		};
+
+		document.body.appendChild(popup);
+		this._newTokenPopups.set(key, popup);
+
+		// Auto-dismiss after 5 seconds
+		setTimeout(() => {
+			if (this._newTokenPopups.has(key)) {
+				popup.style.opacity = '0';
+				setTimeout(() => {
+					if (popup.parentNode) popup.parentNode.removeChild(popup);
+					this._newTokenPopups.delete(key);
+				}, 300);
+			}
+		}, 5000);
 	}
 } 

@@ -18,14 +18,30 @@ export class TagCluster {
 	 * Create a new TagCluster
 	 * @param {THREE.Scene} scene - Three.js scene
 	 * @param {THREE.Camera} camera - Three.js camera
+	 * @param {Object} tagsManagerOrOptions - Either a TagsManager or configuration options
 	 * @param {Object} options - Configuration options
 	 */
-	constructor(scene, camera, options = {}) {
+	constructor(scene, camera, tagsManagerOrOptions = null, options = {}) {
 		// Store references
 		this.scene = scene;
 		this.camera = camera;
 		
-		// Configuration
+		// Determine if the third parameter is a TagsManager/TagManager or options object
+		let suppliedTagManager = null;
+		let configOptions = {};
+		
+		if (tagsManagerOrOptions) {
+			// If it looks like a TagManager (has createTag method) or a TagsManager wrapper (has tagManager property)
+			if (typeof tagsManagerOrOptions.createTag === 'function' || tagsManagerOrOptions.tagManager) {
+				// Handle both raw TagManager and TagsManager wrapper
+				suppliedTagManager = tagsManagerOrOptions.tagManager ? tagsManagerOrOptions.tagManager : tagsManagerOrOptions;
+			} else if (typeof tagsManagerOrOptions === 'object') {
+				// Treat as configuration options
+				configOptions = tagsManagerOrOptions;
+			}
+		}
+
+		// Merge default options with provided configuration options and the explicit options param
 		this.options = {
 			maxTags: 150,                     // Maximum number of tags to display
 			updateInterval: 10000,           // How often to update tokens (ms)
@@ -33,11 +49,16 @@ export class TagCluster {
 			maxTagSize: 5.0,                 // Maximum tag size
 			initialTagCount: 50,              // Initial number of tags
 			baseTokenUrl: 'https://dexscreener.com/ethereum/',
+			...configOptions,
 			...options
 		};
-		
-		// Create the tag manager
-		this.tagManager = new TagManager(scene, camera);
+
+		// Use supplied TagManager if available, otherwise create a new one
+		if (suppliedTagManager) {
+			this.tagManager = suppliedTagManager;
+		} else {
+			this.tagManager = new TagManager(scene, camera);
+		}
 		
 		// Track tokens and tags
 		this.tokens = [];           // Token data from DexScreener
@@ -124,7 +145,7 @@ export class TagCluster {
 		});
 		
 		// Add new tokens dynamically 
-		const tagsToAddLimit = this.firstUpdate ? Math.min(60, this.options.maxTags) : 2; // Add up to 60 on first update, then 2 per update
+		const tagsToAddLimit = 60; // Add up to 60 on first update, then 2 per update
 		const tagsToAdd = Math.min(
 			tokensToAdd.length,
 			this.options.maxTags - this.tokenTags.size,
@@ -294,7 +315,7 @@ export class TagCluster {
 			'avalanche': '#E84142', // Red for Avalanche
 			'optimism': '#FF0420', // Bright red for Optimism
 			'arbitrum': '#28A0F0', // Blue for Arbitrum
-			'solana': '#00FFA3', // Bright teal for Solana
+			'solana': '#14F195', // Bright teal for Solana
 			'base': '#0052FF' // Bright blue for Base
 		};
 		return chainColours[chainId?.toLowerCase()] || '#FFFFFF'; // Default to white if chain not found
@@ -356,13 +377,17 @@ export class TagCluster {
 		
 		// Create the tag
 		try {
-			const tag = this.tagManager.createTag(displaySymbol, tokenUrl, {
-				scale: size,
-				size: 0.5,     // Base text size before scaling
-				depth: 0.65,   // Extrusion depth 
-				token: token,   // Store reference to token data
-				color: tagColour // Assign colour based on chain
-			});
+			const tag = this.tagManager.createTag(
+				displaySymbol,
+				tokenUrl,
+				{
+					scale: size,
+					size: 0.5,     // Base text size before scaling
+					depth: 0.65,   // Extrusion depth 
+					color: tagColour // Assign colour based on chain
+				},
+				token // Pass token data separately so TagManager can attach it correctly
+			);
 			
 			// If successful, store in our mapping
 			if (tag) {
@@ -445,7 +470,7 @@ export class TagCluster {
 	/**
 	 * Calculate token size based on market data
 	 * @param {Object} token - Token data
-	 * @returns {number} - Size value between minTagSize and maxTagSize
+	 * @returns {number} - Size value using minTagSize and maxTagSize as the scale reference
 	 */
 	calculateTokenSize(token) {
 		const { minTagSize, maxTagSize } = this.options;
@@ -476,12 +501,12 @@ export class TagCluster {
 			// Use logarithmic scale
 			const logMin = Math.log(minMarketCap);
 			const logMax = Math.log(maxMarketCap);
-			const logValue = Math.log(Math.max(minMarketCap, Math.min(maxMarketCap, marketCap)));
+			const logValue = Math.log(Math.max(minMarketCap / 10, marketCap)); // Lower minimum to allow smaller sizes
 			
-			// Normalize to 0-1 range
+			// Normalize to 0-1 range, but don't clamp - allow values outside 0-1 range
 			const normalizedValue = (logValue - logMin) / (logMax - logMin);
 			
-			// Calculate size
+			// Calculate size - can be bigger or smaller than reference scale
 			size = minTagSize + (maxTagSize - minTagSize) * normalizedValue;
 		} 
 		// Fallback to liquidity if no market cap
@@ -493,12 +518,12 @@ export class TagCluster {
 			// Use logarithmic scale
 			const logMin = Math.log(minLiquidity);
 			const logMax = Math.log(maxLiquidity);
-			const logValue = Math.log(Math.max(minLiquidity, Math.min(maxLiquidity, liquidity)));
+			const logValue = Math.log(Math.max(minLiquidity / 10, liquidity)); // Lower minimum to allow smaller sizes
 			
-			// Normalize to 0-1 range
+			// Normalize to 0-1 range, but don't clamp - allow values outside 0-1 range
 			const normalizedValue = (logValue - logMin) / (logMax - logMin);
 			
-			// Calculate size
+			// Calculate size - can be bigger or smaller than reference scale
 			size = minTagSize + (maxTagSize - minTagSize) * normalizedValue;
 		}
 		
@@ -516,8 +541,8 @@ export class TagCluster {
 			}
 		}
 		
-		// Ensure size is within bounds
-		return Math.max(minTagSize, Math.min(size, maxTagSize));
+		// Return the calculated size without clamping
+		return size;
 	}
 	
 	/**

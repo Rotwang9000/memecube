@@ -1,9 +1,13 @@
 // Define module mappings for the application
 const importMap = {
 	imports: {
-		"three": "../lib/three.module.js",
-		"three/addons/": "../lib/",
-		"three/addons/controls/OrbitControls.js": "../lib/OrbitControls.js"
+		"three": "/js/lib/three.module.js",
+		"three/addons/": "/js/lib/",
+		"three/addons/controls/OrbitControls.js": "/js/lib/OrbitControls.js",
+		"three/addons/controls/FlyControls.js": "/js/lib/FlyControls.js",
+		"three/addons/loaders/FontLoader.js": "/js/lib/FontLoader.js",
+		"three/addons/geometries/TextGeometry.js": "/js/lib/TextGeometry.js",
+		"gsap": "/js/lib/gsap-wrapper.js"
 	}
 };
 

@@ -36,7 +36,7 @@ export class TokenVisualizationManager {
 		this.dataProvider.registerUpdateCallback(this.onDataUpdate.bind(this));
 		
 		// Start auto-refresh
-		this.dataProvider.startAutoRefresh(15000); // 15 seconds refresh
+		this.dataProvider.startAutoRefresh(7000); // 7 seconds refresh
 	}
 	
 	/**
