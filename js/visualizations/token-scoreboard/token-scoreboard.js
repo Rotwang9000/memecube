@@ -597,6 +597,9 @@ export class TokenScoreboard {
 		const previousMode = this.sizeMode;
 		this.sizeMode = mode;
 		
+		// Detect if we are expanding from hidden/small to normal
+		this._burstFromOrigin = (previousMode === 'hidden' || previousMode === 'small') && mode === 'normal';
+		
 		// Explicitly ensure LED display visibility when changing from hidden to normal/tall
 		if (previousMode === 'hidden' && (mode === 'normal' || mode === 'tall')) {
 			if (this.ledDisplay && this.ledDisplay.ledGroup) {
@@ -846,7 +849,8 @@ export class TokenScoreboard {
 							}
 						}
 					},
-					() => this.finalizeSizeModeChange()
+					() => this.finalizeSizeModeChange(),
+					{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: new THREE.Vector3(0, 0, -1.0) }
 				);
 			} else {
 				// Still moving, check again soon
@@ -927,7 +931,8 @@ export class TokenScoreboard {
 						() => {
 							console.log("Height animation complete, finalizing hidden->normal transition");
 							this.finalizeSizeModeChange();
-						}
+						},
+						{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: new THREE.Vector3(0, 0, -1.0) }
 					);
 				}, 100); // Short delay for visual effect
 			} else {
@@ -995,15 +1000,16 @@ export class TokenScoreboard {
 				return;
 			}
 			
+			// CRITICAL FIX: Ensure jet base position matches bolt position
+			// Use direct position access as both objects are in the same coordinate space
+			jet.basePosition.copy(bolt.position);
+			
 			// Create a random movement direction with strong backwards component
 			const moveDir = new THREE.Vector3(
 				(Math.random() - 0.5) * 0.4,   // Wider horizontal spread
 				(Math.random() - 0.5) * 0.4,   // Wider vertical spread
 				(Math.random() - 0.5) * 0.2 - 0.8 * intensity // Strong backward Z component
 			);
-			
-			// Ensure jet base position matches bolt position exactly
-			jet.basePosition.copy(bolt.position);
 			
 			// Emit particles directly - more particles for higher visibility
 			const particleCount = Math.ceil(30 * intensity); // Increased from 20
@@ -1032,7 +1038,7 @@ export class TokenScoreboard {
 						const jet = this.jetsManager.jets[index];
 						if (!jet) return;
 						
-						// Ensure jet position matches bolt precisely
+						// CRITICAL FIX: Ensure jet base position matches bolt position
 						jet.basePosition.copy(bolt.position);
 						
 						// Create echo direction vector
@@ -1942,21 +1948,25 @@ export class TokenScoreboard {
 			// Show chain ID and age information if available
 			row += 6;
 			const chainMap = {
-				1: 'ETH',
-				56: 'BSC',
-				137: 'POLY',
-				42161: 'ARB',
-				10: 'OP',
+				1: 'ETHEREUM',
+				56: 'BINANCE',
+				137: 'POLYGON',
+				42161: 'ARBITRUM',
+				10: 'OPTIMISM',
 				8453: 'BASE',
 			};
 			
-			const chainName = chainMap[this.detailToken.chainId] || `CH:${this.detailToken.chainId || 'N/A'}`;
+			const chainName = chainMap[this.detailToken.chainId] || `${this.detailToken.chainId || ''}`;
 			d.drawText(chainName, row, 2, 'green');
-			
+			row += 6;
+
 			// Show address or link info
 			if (this.detailToken.tokenAddress) {
-				const shortAddr = `${this.detailToken.tokenAddress.substring(0, 6)}...`;
-				d.drawText(shortAddr, row, 20, 'yellow');
+				//split the address into 3 lines of 10 characters each
+				const addrLines = this.detailToken.tokenAddress.match(/.{1,10}/g);
+				for (let i = 0; i < addrLines.length; i++) {
+					d.drawText(addrLines[i], row, 20 + i * 12, 'yellow');
+				}
 			}
 		}
 	}

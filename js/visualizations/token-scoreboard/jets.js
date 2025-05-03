@@ -12,6 +12,7 @@ export class JetsManager {
 		this.lastMovementTime = 0;
 		this.jetFadeSpeed = 1.2; // Reduced fade speed for longer-lasting particles
 		this._needsTestEmission = true; // Set to true to emit test particles on first update
+		this.suppressEmission = false; // Flag to control particle emission
 		
 		// Add jets group to parent
 		this.parentGroup.add(this.jetsGroup);
@@ -50,7 +51,7 @@ export class JetsManager {
 			const sizes = new Float32Array(particleCount);
 			const opacities = new Float32Array(particleCount); // Add opacity attribute
 			
-			// Get bolt position
+			// Get bolt position - critical to use the correct coordinate space
 			const pos = bolt.position.clone();
 			
 			// Initialize all positions to the jet origin
@@ -118,6 +119,10 @@ export class JetsManager {
 			jetSystem.renderOrder = 1000; // Very high render order to ensure visibility
 			jetSystem.frustumCulled = false; // Prevent frustum culling which might hide particles
 			
+			// CRITICAL FIX: Position at origin - particles will be positioned in world space coordinates
+			// Particle positions are already set correctly, the system itself should be at origin
+			jetSystem.position.set(0, 0, 0);
+			
 			// Store jet data for animation - explicitly link to the bolt
 			this.jets.push({
 				system: jetSystem,
@@ -132,9 +137,15 @@ export class JetsManager {
 				bolt: bolt // Direct reference to bolt
 			});
 			
-			// Add to jets group
+			// Add to jets group - this is a child of parentGroup
 			this.jetsGroup.add(jetSystem);
+			
+			// Log positions for debugging
+			console.log(`Created jet ${boltIndex} at position ${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}`);
 		});
+		
+		// Set jetsGroup at origin to ensure correct coordinate space
+		this.jetsGroup.position.set(0, 0, 0);
 	}
 	
 	/**
@@ -226,6 +237,12 @@ export class JetsManager {
 		
 		// Determine if this is part of an animated movement
 		const isAnimated = this.isMoving;
+		
+		// Skip particle emission if suppressed
+		if (this.suppressEmission) {
+			console.log("Jets activated but emission suppressed");
+			return;
+		}
 		
 		// Always emit some test particles to ensure visibility
 		console.log("Activating jets with direction:", moveDir);
@@ -464,15 +481,17 @@ export class JetsManager {
 				// Store previous position to detect movement
 				const previousPosition = jet.basePosition.clone();
 				
-				// Update jet position to match bolt precisely
-				jet.basePosition.copy(bolt.position);
+				// Get bolt position in world space - CRITICAL FIX: Use local position
+				// The system is already in the parentGroup, so we need local coordinates
+				const boltLocalPos = bolt.position.clone();
 				
-				// Set system position to match bolt as well
+				// Ensure the jet's base position is set correctly
+				jet.basePosition.copy(boltLocalPos);
+				
+				// CRITICAL FIX: Reset the system's position to origin
+				// The particles are already in the correct parent group
 				if (jet.system) {
-					// Ensure particle system position matches bolt and jet position
-					if (!jet.system.position.equals(bolt.position)) {
-						jet.system.position.copy(bolt.position);
-					}
+					jet.system.position.set(0, 0, 0);
 				}
 				
 				// Only check for movement if not forcing an update
@@ -481,8 +500,8 @@ export class JetsManager {
 					const movement = new THREE.Vector3().subVectors(jet.basePosition, previousPosition);
 					const movementMagnitude = movement.length();
 					
-					// If movement is significant, emit particles
-					if (movementMagnitude > 0.01) {
+					// If movement is significant, emit particles (unless suppressed)
+					if (movementMagnitude > 0.01 && !this.suppressEmission) {
 						console.log(`Bolt ${i} moved by ${movementMagnitude.toFixed(4)}, activating jet`);
 						const direction = movement.clone().normalize().multiplyScalar(-1);
 						// Invert Y component to fix direction
@@ -501,7 +520,7 @@ export class JetsManager {
 					}
 				} else if (forceUpdate) {
 					// On force update, ensure particles stay attached to bolts
-					console.log(`Syncing jet ${i} with bolt position: ${bolt.position.x.toFixed(2)}, ${bolt.position.y.toFixed(2)}, ${bolt.position.z.toFixed(2)}`);
+					console.log(`Syncing jet ${i} with bolt position: ${boltLocalPos.x.toFixed(2)}, ${boltLocalPos.y.toFixed(2)}, ${boltLocalPos.z.toFixed(2)}`);
 					
 					// Force update the jet particles with the new position
 					const positions = jet.geometry.attributes.position.array;
@@ -510,9 +529,9 @@ export class JetsManager {
 						
 						// Only update particles that haven't been emitted yet (life <= 0)
 						if (particle.life <= 0) {
-							positions[p * 3] = bolt.position.x;
-							positions[p * 3 + 1] = bolt.position.y;
-							positions[p * 3 + 2] = bolt.position.z;
+							positions[p * 3] = boltLocalPos.x;
+							positions[p * 3 + 1] = boltLocalPos.y;
+							positions[p * 3 + 2] = boltLocalPos.z;
 						}
 					}
 					
@@ -556,6 +575,12 @@ export class JetsManager {
 	 */
 	forceTestParticles() {
 		if (!this.jets || this.jets.length === 0) return;
+		
+		// Skip if emission is suppressed
+		if (this.suppressEmission) {
+			console.log("Test particles suppressed due to suppressEmission flag");
+			return;
+		}
 		
 		console.log("Forcing test particles from all jets");
 		

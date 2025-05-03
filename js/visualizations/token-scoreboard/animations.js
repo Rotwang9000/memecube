@@ -53,6 +53,14 @@ export class AnimationManager {
 		const rotY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 		this.targetQuaternion.multiply(rotZ).multiply(rotY);
 		
+		// Find jets manager if it exists
+		let jetsManager = null;
+		if (scoreboardGroup.userData && scoreboardGroup.userData.jetsManager) {
+			jetsManager = scoreboardGroup.userData.jetsManager;
+			// CRITICAL: Allow jet emission during movement animations
+			if (jetsManager) jetsManager.suppressEmission = false;
+		}
+		
 		// Set up animation with frame rate control
 		const animate = (currentTime) => {
 			if (!this.isMoving) return;
@@ -115,13 +123,17 @@ export class AnimationManager {
 	 * @param {number} targetHeight - Target height to animate to
 	 * @param {Function} onUpdate - Callback for each animation frame
 	 * @param {Function} onComplete - Callback when animation completes
+	 * @param {Object} options - Optional: { burstFromOrigin: bool, burstOrigin: THREE.Vector3 }
 	 */
-	animateCornerBolts(cornerBolts, isTallMode, startHeight, targetHeight, onUpdate, onComplete) {
+	animateCornerBolts(cornerBolts, isTallMode, startHeight, targetHeight, onUpdate, onComplete, options = {}) {
 		// Skip if no corner bolts exist
 		if (!cornerBolts || cornerBolts.length < 4) {
 			if (onComplete) onComplete();
 			return;
 		}
+		
+		const burstFromOrigin = !!options.burstFromOrigin;
+		const burstOrigin = options.burstOrigin || new THREE.Vector3(0, 0, -1.0);
 		
 		// Find jets if they exist
 		let jetsManager = null;
@@ -149,23 +161,29 @@ export class AnimationManager {
 		const startTime = performance.now();
 		
 		// Store starting values
-		const startPosTopLeft = topLeftBolt.position.clone();
-		const startPosTopRight = topRightBolt.position.clone();
-		const startPosBottomLeft = bottomLeftBolt.position.clone();
-		const startPosBottomRight = bottomRightBolt.position.clone();
-		
-		// Validate starting positions - ensure left bolts are on left and right bolts are on right
-		// This prevents any incorrect starting positions
-		const halfWidth = (startPosTopRight.x - startPosTopLeft.x) / 2 - 0.45;
-		if (startPosTopRight.x < 0 || startPosBottomRight.x < 0) {
-			console.warn("Correcting right bolt positions - they were on the wrong side");
-			startPosTopRight.x = Math.abs(halfWidth) + 0.45;
-			startPosBottomRight.x = Math.abs(halfWidth) + 0.45;
-		}
-		if (startPosTopLeft.x > 0 || startPosBottomLeft.x > 0) {
-			console.warn("Correcting left bolt positions - they were on the wrong side");
-			startPosTopLeft.x = -Math.abs(halfWidth) - 0.45;
-			startPosBottomLeft.x = -Math.abs(halfWidth) - 0.45;
+		let startPosTopLeft, startPosTopRight, startPosBottomLeft, startPosBottomRight;
+		if (burstFromOrigin) {
+			startPosTopLeft = burstOrigin.clone();
+			startPosTopRight = burstOrigin.clone();
+			startPosBottomLeft = burstOrigin.clone();
+			startPosBottomRight = burstOrigin.clone();
+			// Set all bolts to burstOrigin immediately
+			cornerBolts[0].position.copy(burstOrigin);
+			cornerBolts[1].position.copy(burstOrigin);
+			cornerBolts[2].position.copy(burstOrigin);
+			cornerBolts[3].position.copy(burstOrigin);
+			// If jetsManager exists, sync jets to burstOrigin
+			if (jetsManager && jetsManager.jets) {
+				jetsManager.jets.forEach(jet => {
+					jet.basePosition.copy(burstOrigin);
+					if (jet.system) jet.system.position.set(0, 0, 0);
+				});
+			}
+		} else {
+			startPosTopLeft = topLeftBolt.position.clone();
+			startPosTopRight = topRightBolt.position.clone();
+			startPosBottomLeft = bottomLeftBolt.position.clone();
+			startPosBottomRight = bottomRightBolt.position.clone();
 		}
 		
 		// Store starting plate positions if they exist
@@ -173,6 +191,21 @@ export class AnimationManager {
 		const startPosTopRightPlate = topRightBolt.userData.plate ? topRightBolt.userData.plate.position.clone() : null;
 		const startPosBottomLeftPlate = bottomLeftBolt.userData.plate ? bottomLeftBolt.userData.plate.position.clone() : null;
 		const startPosBottomRightPlate = bottomRightBolt.userData.plate ? bottomRightBolt.userData.plate.position.clone() : null;
+		
+		// CRITICAL: Store the bolt-to-jet mapping for better synchronization
+		const boltToJetMap = new Map();
+		if (jetsManager && jetsManager.jets) {
+			// Find matching jets for each bolt by comparing positions
+			cornerBolts.forEach((bolt, boltIndex) => {
+				const jetIndex = jetsManager.jets.findIndex(jet => 
+					bolt.position.distanceTo(jet.basePosition) < 0.5);
+				
+				if (jetIndex !== -1) {
+					boltToJetMap.set(bolt, jetsManager.jets[jetIndex]);
+					console.log(`Mapped bolt ${boltIndex} to jet ${jetIndex}`);
+				}
+			});
+		}
 		
 		// Calculate target positions for all bolts
 		let targetTopLeftPos, targetTopRightPos, targetBottomLeftPos, targetBottomRightPos;
@@ -324,33 +357,20 @@ export class AnimationManager {
 				bottomRightBolt.userData.plate.position.lerpVectors(startPosBottomRightPlate, targetPlatePos, easedProgress);
 			}
 			
-			// Trigger jet effects periodically during animation
+			// Only update jet base positions to follow bolts, do NOT emit particles during height animation
 			if (jetsManager) {
-				// Try to emit jet particles every 150ms during animation
-				if (timestamp - lastJetTime > 150) {
-					const intensity = 0.5 + easedProgress * 0.5; // Increase intensity as animation progresses
-					
-					// Create random movement directions for jets
-					const jets = jetsManager.jets || [];
-					jets.forEach((jet, index) => {
-						if (!jet) return;
-						
-						// Create movement direction with random variations
-						const moveDir = new THREE.Vector3(
-							(Math.random() - 0.5) * 0.2,
-							(Math.random() - 0.5) * 0.2,
-							(Math.random() - 0.5) * 0.2 - 0.8 // Mostly backward
-						);
-						
-						// Emit multiple particles for better effect
-						const particleCount = Math.ceil(5 * intensity);
-						for (let i = 0; i < particleCount; i++) {
-							jetsManager.emitJetParticle(jet, moveDir, intensity);
+				// CRITICAL FIX: Set suppressEmission flag to true during height changes
+				jetsManager.suppressEmission = true;
+				
+				if (boltToJetMap.size > 0) {
+					boltToJetMap.forEach((jet, bolt) => {
+						if (jet && bolt.visible) {
+							jet.basePosition.copy(bolt.position);
+							if (jet.system) jet.system.position.set(0, 0, 0);
 						}
 					});
-					
-					// Update last jet time
-					lastJetTime = timestamp;
+				} else {
+					jetsManager.syncJetsWithBolts(true);
 				}
 			}
 			
@@ -358,59 +378,14 @@ export class AnimationManager {
 			if (progress < 1) {
 				requestAnimationFrame(animate);
 			} else {
-				// Ensure final positions are exactly as intended
-				topLeftBolt.position.copy(targetTopLeftPos);
-				topRightBolt.position.copy(targetTopRightPos);
-				bottomLeftBolt.position.copy(targetBottomLeftPos);
-				bottomRightBolt.position.copy(targetBottomRightPos);
-				
-				// Double-check that bolts maintained their correct sides
-				if (topLeftBolt.position.x > 0 || bottomLeftBolt.position.x > 0) {
-					console.warn("Left bolts ended up on wrong side - fixing");
-					topLeftBolt.position.x = -Math.abs(topLeftBolt.position.x);
-					bottomLeftBolt.position.x = -Math.abs(bottomLeftBolt.position.x);
-				}
-				if (topRightBolt.position.x < 0 || bottomRightBolt.position.x < 0) {
-					console.warn("Right bolts ended up on wrong side - fixing");
-					topRightBolt.position.x = Math.abs(topRightBolt.position.x);
-					bottomRightBolt.position.x = Math.abs(bottomRightBolt.position.x);
-				}
-				
-				// Ensure final positions for plates
-				if (topLeftBolt.userData.plate) {
-					const plateOffset = new THREE.Vector3(0, 0, 0.1);
-					topLeftBolt.userData.plate.position.copy(targetTopLeftPos.clone().add(plateOffset));
-				}
-				
-				if (topRightBolt.userData.plate) {
-					const plateOffset = new THREE.Vector3(0, 0, 0.1);
-					topRightBolt.userData.plate.position.copy(targetTopRightPos.clone().add(plateOffset));
-				}
-				
-				if (bottomLeftBolt.userData.plate) {
-					const plateOffset = new THREE.Vector3(0, 0, 0.1);
-					bottomLeftBolt.userData.plate.position.copy(targetBottomLeftPos.clone().add(plateOffset));
-				}
-				
-				if (bottomRightBolt.userData.plate) {
-					const plateOffset = new THREE.Vector3(0, 0, 0.1);
-					bottomRightBolt.userData.plate.position.copy(targetBottomRightPos.clone().add(plateOffset));
-				}
-				
-				// Final jet burst on completion
+				// Final position sync for jets
 				if (jetsManager) {
-					jetsManager.jets.forEach(jet => {
-						if (!jet) return;
-						
-						// Create backward burst effect
-						const moveDir = new THREE.Vector3(0, 0, -1);
-						for (let i = 0; i < 10; i++) {
-							jetsManager.emitJetParticle(jet, moveDir, 1.0);
-						}
-					});
+					// CRITICAL FIX: Reset suppressEmission flag when height animation completes
+					jetsManager.suppressEmission = false;
+					
+					jetsManager.syncJetsWithBolts(true);
 				}
-				
-				// Call completion callback
+				// Call the completion callback
 				if (onComplete) onComplete();
 			}
 		};
@@ -429,6 +404,13 @@ export class AnimationManager {
 	 * @param {Function} onComplete - Function to call when complete
 	 */
 	animateCornerBoltsToCorner(cornerBolts, startHeight, targetHeight, onUpdate, onComplete) {
+		// Find jets manager if available
+		let jetsManager = null;
+		if (cornerBolts?.[0]?.parent?.userData?.jetsManager) {
+			jetsManager = cornerBolts[0].parent.userData.jetsManager;
+			// Suppress particle emission during height animation
+			jetsManager.suppressEmission = true;
+		}
 		// Skip if no corner bolts exist
 		if (!cornerBolts || cornerBolts.length < 4) {
 			if (onComplete) onComplete();
@@ -500,6 +482,11 @@ export class AnimationManager {
 			if (progress < 1) {
 				requestAnimationFrame(animate);
 			} else {
+				// CRITICAL FIX: Reset jets emission flag when animation completes
+				if (jetsManager) {
+					jetsManager.suppressEmission = false;
+				}
+				
 				// Call the completion callback
 				if (onComplete) onComplete();
 			}
@@ -519,6 +506,13 @@ export class AnimationManager {
 	 * @param {Function} onComplete - Function to call when complete
 	 */
 	animateCornerBoltsToNormalPositions(cornerBolts, startHeight, targetHeight, onUpdate, onComplete) {
+		// Find jets manager if available
+		let jetsManager = null;
+		if (cornerBolts?.[0]?.parent?.userData?.jetsManager) {
+			jetsManager = cornerBolts[0].parent.userData.jetsManager;
+			// Suppress particle emission during height animation
+			jetsManager.suppressEmission = true;
+		}
 		// Skip if no corner bolts exist
 		if (!cornerBolts || cornerBolts.length < 4) {
 			if (onComplete) onComplete();
@@ -592,6 +586,11 @@ export class AnimationManager {
 			if (progress < 1) {
 				requestAnimationFrame(animate);
 			} else {
+				// CRITICAL FIX: Reset jets emission flag when animation completes
+				if (jetsManager) {
+					jetsManager.suppressEmission = false;
+				}
+				
 				// Call the completion callback
 				if (onComplete) onComplete();
 			}

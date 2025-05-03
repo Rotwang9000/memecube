@@ -52,7 +52,7 @@ export class VisualizationManager {
 		this.tokenScoreboard = new TokenScoreboard(this.scene, this.camera, this.dataProvider);
 		
 		// Create token chart
-		this.tokenChart = new TokenChart3D(this.scene, this.camera);
+		//this.tokenChart = new TokenChart3D(this.scene, this.camera);
 		
 		// Create tag cluster visualization
 		this.tokenCluster = new TagCluster(this.scene, this.camera, this.tagsManager);
@@ -69,10 +69,10 @@ export class VisualizationManager {
 			this.tokenScoreboard.updateScreenPosition();
 		}
 		
-		if (this.tokenChart) {
-			this.tokenChart.isVisible = true;
-			this.tokenChart.updateScreenPosition();
-		}
+		// if (this.tokenChart) {
+		// 	this.tokenChart.isVisible = true;
+		// 	this.tokenChart.updateScreenPosition();
+		// }
 		
 		// Initialize the tag cluster with empty data first
 		if (this.tokenCluster) {
