@@ -133,18 +133,9 @@ class MemeCube {
 			const { text, url, size, tokenData, source } = event.detail;
 			
 			// Check for duplicates before adding
-			// Check for duplicate based on token address if available
-			if (tokenData && (tokenData.tokenAddress || tokenData.pairAddress)) {
-				// If we have token address, use that for duplicate check
-				const addressToCheck = tokenData.tokenAddress || tokenData.pairAddress;
-				if (this.tagsManager.tags.some(tag => 
-					tag.token && (tag.token.tokenAddress === addressToCheck || tag.token.pairAddress === addressToCheck)
-				)) {
-					return; // Token with this address already exists
-				}
-			} else {
-				// No token address - don't add the token
-				console.log(`Token ${text} has no address for identification, skipping.`);
+			if (this.tagsManager.tags.some(tag => tag.originalName === text || tag.name === `$${text}`)) {
+				// console.log(`Token ${text} already exists, skipping.`);
+				// this.utils.showTemporaryMessage(`Token ${text} already exists!`);
 				return;
 			}
 			
@@ -480,7 +471,7 @@ class MemeCube {
 			// Rate limiting variables
 			let lastCallbackTime = 0;
 			let isRefreshInProgress = false;
-			const callbackMinInterval = 5000; // 15 seconds between refreshes
+			const callbackMinInterval = 15000; // 15 seconds between refreshes
 			
 			// Create the callback function
 			const updateCallback = (updatedData) => {
@@ -599,7 +590,6 @@ class MemeCube {
 	}
 	
 	setupFormSubmission() {
-		return;
 		const form = document.getElementById('tag-form');
 		
 		form.addEventListener('submit', async (e) => {
@@ -1081,7 +1071,6 @@ class MemeCube {
 	 * Display a demo token in the visualizations
 	 */
 	async showDemoToken() {
-		return;
 		// Ensure we have a visualization manager
 		if (!this.visualizationManager) return;
 		
@@ -1097,7 +1086,6 @@ class MemeCube {
 	}
 	
 	startDemoMode() {
-		return;
 		// Clear any existing interval
 		if (this.demoInterval) {
 			clearInterval(this.demoInterval);
@@ -1285,24 +1273,11 @@ class MemeCube {
 	animate() {
 		requestAnimationFrame(this.animate.bind(this));
 		
-		// Performance monitoring
-		const perfMetrics = {
-			total: 0,
-			deltaTime: 0,
-			tagCount: 0,
-			scene: 0,
-			tagsManager: 0,
-			controls: 0,
-			visualization: 0
-		};
-		const perfStart = performance.now();
-		
 		// Calculate delta time
 		const currentTime = this.clock.getElapsedTime();
 		const deltaTime = currentTime - this.lastTime;
 		this.lastTime = currentTime;
-		perfMetrics.deltaTime = performance.now() - perfStart;
-
+		
 		// Update frame counter for FPS calculation
 		this.frameCounter++;
 		
@@ -1310,7 +1285,6 @@ class MemeCube {
 		if (this.frameCounter % 30 === 0 && this.tagCountDisplay) {
 			const tagCount = this.tagsManager ? this.tagsManager.tags.length : 0;
 			this.tagCountDisplay.textContent = `Tags: ${tagCount}/${this.maxInitialTokens}`;
-			perfMetrics.tagCount = tagCount;
 			
 			// Also update FPS counter
 			const now = performance.now();
@@ -1357,38 +1331,24 @@ class MemeCube {
 		}
 		
 		// Update scene
-		const sceneStart = performance.now();
 		this.scene.update();
-		perfMetrics.scene = performance.now() - sceneStart;
 		
 		// Update tags
-		const tagsStart = performance.now();
 		this.tagsManager.update(deltaTime);
-		perfMetrics.tagsManager = performance.now() - tagsStart;
 		
 		// Update controls
-		const controlsStart = performance.now();
 		this.controls.update();
-		perfMetrics.controls = performance.now() - controlsStart;
 		
 		// Update visualizations only when needed (camera is moving or periodically)
 		if (this.visualizationManager) {
-			const vizStart = performance.now();
 			// Only pass isCameraMoving when true to avoid unnecessary updates
 			if (isCameraMoving || this.frameCounter % 10 === 0) {
-				this.visualizationManager.update(deltaTime, isCameraMoving);
+			this.visualizationManager.update(deltaTime, isCameraMoving);
 			} else {
 				// Lightweight update without camera movement recalculation
 				this.visualizationManager.update(deltaTime, false);
 			}
-			perfMetrics.visualization = performance.now() - vizStart;
 		}
-		
-		// // Calculate total time and log if it's too high
-		// perfMetrics.total = performance.now() - perfStart;
-		// if (perfMetrics.total > 64) { // Over 16.67ms = under 60fps
-		// 	console.log('Performance warning:', perfMetrics);
-		// }
 	}
 	
 	// Setup test button for scoreboard

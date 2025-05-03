@@ -267,21 +267,39 @@ export class Scene {
 	}
 	
 	update() {
-		// Animate star layers for twinkling effect
-		if (this.starLayers) {
-			this.starLayers.forEach((stars, index) => {
-				const speed = 0.0001 * (index + 1);
-				stars.rotation.y += speed;
-				stars.rotation.x += speed * 0.5;
-			});
+		// Frame counter to skip updates of background elements
+		if (!this.frameCounter) {
+			this.frameCounter = 0;
+			this.lastAnimationUpdate = 0;
 		}
+		this.frameCounter++;
 		
-		// Animate nebula clouds for subtle movement
-		if (this.nebulaClouds) {
-			this.nebulaClouds.forEach((cloud, index) => {
-				cloud.rotation.y -= 0.0002 * (index * 0.5 + 1);
-				cloud.rotation.x -= 0.0001 * (index * 0.5 + 1);
-			});
+		// Only update animations every few frames to improve performance
+		const shouldUpdateAnimations = this.frameCounter % 10 === 0;
+		
+		// Animate star layers for twinkling effect - but only on some frames
+		if (shouldUpdateAnimations && this.starLayers) {
+			const now = Date.now();
+			// Only update if enough time has passed (throttle to 20fps for background)
+			if (now - this.lastAnimationUpdate > 50) {
+				this.starLayers.forEach((stars, index) => {
+					// Reduce animation speed by 50% to improve performance
+					const speed = 0.00005 * (index + 1);
+					stars.rotation.y += speed;
+					stars.rotation.x += speed * 0.5;
+				});
+				
+				// Animate nebula clouds for subtle movement
+				if (this.nebulaClouds) {
+					this.nebulaClouds.forEach((cloud, index) => {
+						// Reduce animation speed by 50% 
+						cloud.rotation.y -= 0.0001 * (index * 0.5 + 1);
+						cloud.rotation.x -= 0.00005 * (index * 0.5 + 1);
+					});
+				}
+				
+				this.lastAnimationUpdate = now;
+			}
 		}
 		
 		// Render the scene

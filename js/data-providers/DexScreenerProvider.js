@@ -29,7 +29,7 @@ export class DexScreenerProvider extends TokenDataProvider {
 		this.refreshTokenCount = 2;      // Get 2 tokens on regular refresh
 		
 		// Set refresh rate for token data
-		this.fetchInterval = 6000; // 6 seconds
+		this.fetchInterval = 6000; // 6 seconds 
 		
 		// Token pair data cache (individual token pair details, NOT the full token list)
 		this.tokenPairCache = new Map();
@@ -481,37 +481,65 @@ export class DexScreenerProvider extends TokenDataProvider {
 		try {
 			console.log("DexScreenerProvider: Refreshing token data...");
 			
-			// Update the current page tokens
-			const currentPageTokens = await this.updateCurrentPageTokens();
+			// Only perform a full refresh of all tokens if:
+			// 1. It's been more than 60 seconds since last refresh, OR
+			// 2. We have no token data yet
+			const now = Date.now();
+			const fullRefreshNeeded = this.tokenData.length === 0 || 
+				(now - this.lastFetchTime > 60000);
+				
+			// Log refresh type
+			console.log(`DexScreenerProvider: Performing ${fullRefreshNeeded ? 'FULL' : 'PARTIAL'} refresh`);
 			
-			// // Always get the latest token profiles from API to ensure our token list is current
-			// const profiles = await this.fetchLatestTokenProfiles();
-			// console.log(`DexScreenerProvider: Fetched ${profiles.length} token profiles from API`);
+			let currentPageTokens;
 			
-			// // Update our master token list with the latest profiles
-			// this.tokenProfiles = profiles;
+			if (fullRefreshNeeded) {
+				// For full refresh, update the entire current page
+				currentPageTokens = await this.updateCurrentPageTokens();
+			} else {
+				// For partial refresh, use existing token data with selected updates
+				currentPageTokens = this.tokensByPage.get(this.currentPage) || [];
+				
+				// If no tokens in cache yet, force a full refresh
+				if (currentPageTokens.length === 0) {
+					console.log("DexScreenerProvider: No tokens in cache, forcing full refresh");
+					currentPageTokens = await this.updateCurrentPageTokens();
+				}
+			}
 			
 			// Select which tokens to fetch market data for
 			const tokensToUpdate = this.selectTokensForMarketDataUpdate(currentPageTokens);
 			console.log(`DexScreenerProvider: Selected ${tokensToUpdate.length} tokens for market data update`);
 			
-			// Fetch market data for selected tokens
-			const updatedTokens = await this.fetchTokenMarketData(tokensToUpdate);
-			console.log(`DexScreenerProvider: Updated market data for ${updatedTokens.length} tokens (from cache and/or API)`);
+			// Only fetch market data if we have tokens to update
+			if (tokensToUpdate.length > 0) {
+				// Fetch market data for selected tokens
+				const updatedTokens = await this.fetchTokenMarketData(tokensToUpdate);
+				console.log(`DexScreenerProvider: Updated market data for ${updatedTokens.length} tokens (from cache and/or API)`);
+				
+				// Update existing token data with the new market data
+				this.updateTokenDataWithNewMarketData(updatedTokens);
+				
+				// Sort and limit data
+				this.sortTokenData();
+			} else {
+				console.log("DexScreenerProvider: No tokens selected for update");
+			}
 			
-			// Update existing token data with the new market data
-			this.updateTokenDataWithNewMarketData(updatedTokens);
-			
-			// Sort and limit data
-			this.sortTokenData();
-			
-			this.lastFetchTime = Date.now();
+			// Track last update time
+			this.lastFetchTime = now;
 			
 			// Save cache periodically
 			this.saveCacheToStorage();
 			
 			// Notify callbacks with current page tokens
-			this.notifyCallbacks(currentPageTokens);
+			// ONLY if we actually updated something
+			if (tokensToUpdate.length > 0 || fullRefreshNeeded) {
+				console.log("DexScreenerProvider: Notifying callbacks with updated token data");
+				await this.notifyCallbacks(currentPageTokens);
+			} else {
+				console.log("DexScreenerProvider: Skipping callback notification (no significant changes)");
+			}
 			
 			return currentPageTokens;
 		} catch (error) {

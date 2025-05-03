@@ -58,7 +58,7 @@ export class VisualizationManager {
 		this.tokenCluster = new TagCluster(this.scene, this.camera, this.tagsManager);
 		
 		// Create UI toggle button for visualizations
-		this.createVisualizationToggle();
+		// this.createVisualizationToggle();
 		
 		// Make sure visualizations are visible and working (force visibility to true)
 		this.showVisualizations = true;
@@ -134,10 +134,10 @@ export class VisualizationManager {
 	}
 	
 	/**
-	 * Callback for when data is updated
-	 * @param {Array} data Updated token data
+	 * Handle data updates from the data provider
+	 * @param {Array} data - Array of token data from data provider
 	 */
-	onDataUpdate(data) {
+	async onDataUpdate(data) {
 		if (!data || data.length === 0) {
 			console.warn("Received empty data update");
 			return;
@@ -148,7 +148,7 @@ export class VisualizationManager {
 		// Update token cluster with all token data
 		if (this.tokenCluster && data.length > 0) {
 			console.log("Updating token cluster with", data.length, "tokens");
-			this.tokenCluster.updateTokens(data);
+			await this.tokenCluster.updateTokens(data);
 		}
 		
 		// Update scoreboard with top tokens
@@ -241,7 +241,7 @@ export class VisualizationManager {
 			if (this.dataProvider) {
 				const tokenData = await this.dataProvider.refreshData();
 				if (this.tokenCluster && tokenData.length > 0) {
-					this.tokenCluster.updateTokens(tokenData);
+					await this.tokenCluster.updateTokens(tokenData);
 					this.utils.showTemporaryMessage(`Updated visualizations with ${tokenData.length} tokens!`);
 				}
 			}
@@ -606,42 +606,66 @@ export class VisualizationManager {
 	 * @param {boolean} isCameraMoving Whether the camera is currently moving
 	 */
 	update(deltaTime, isCameraMoving) {
+		// Performance tracking
+		const perfStart = performance.now();
+		const perfMetrics = {
+			total: 0,
+			connectionCheck: 0,
+			scoreboard: 0,
+			chart: 0,
+			cluster: 0
+		};
+		
 		// Only update visualizations if they're visible
 		if (!this.showVisualizations) return;
 		
 		// Check if visualizationManager connection is intact
+		const connStart = performance.now();
 		// This is critical to ensure tag clicks always work
 		if (this.tagsManager && (!this.tagsManager.visualizationManager || !this.tagsManager.tagManager.visualizationManager)) {
 			console.warn('Detected broken VisualizationManager connection, repairing...');
 			this.establishTagManagerConnection();
 		}
+		perfMetrics.connectionCheck = performance.now() - connStart;
 		
 		// Update token scoreboard
 		if (this.tokenScoreboard) {
+			const sbStart = performance.now();
 			// Only call updateScreenPosition when camera movement starts or stops
 			if (isCameraMoving !== this.lastCameraMoving || (isCameraMoving && this.lastCameraMovingTimestamp && (Date.now() - this.lastCameraMovingTimestamp) > 5000)) {
 				this.lastCameraMovingTimestamp = Date.now();
 				this.tokenScoreboard.updateScreenPosition();
 			}
 			this.tokenScoreboard.update(deltaTime);
+			perfMetrics.scoreboard = performance.now() - sbStart;
 		}
 		
 		// Update token chart
 		if (this.tokenChart) {
+			const chartStart = performance.now();
 			// Only call updateScreenPosition when camera movement starts or stops
 			if (isCameraMoving !== this.lastCameraMoving) {
 				this.tokenChart.updateScreenPosition();
 			}
 			this.tokenChart.update(deltaTime);
+			perfMetrics.chart = performance.now() - chartStart;
 		}
 		
 		// Update token cluster
 		if (this.tokenCluster) {
+			const clusterStart = performance.now();
 			this.tokenCluster.update(deltaTime);
+			perfMetrics.cluster = performance.now() - clusterStart;
 		}
 		
 		// Store camera movement state for next comparison
 		this.lastCameraMoving = isCameraMoving;
+		
+		// Calculate total time and log if it's too high
+		perfMetrics.total = performance.now() - perfStart;
+		if (perfMetrics.total > 10) { // Log if taking over 10ms
+			console.log('VisualizationManager performance:', perfMetrics);
+		}
 	}
 	
 	/**
@@ -788,7 +812,7 @@ export class VisualizationManager {
 			if (existingData && existingData.length > 0) {
 				console.log("Using existing data to initialize visualizations:", existingData.length, "tokens");
 				if (this.tokenCluster) {
-					this.tokenCluster.updateTokens(existingData);
+					await this.tokenCluster.updateTokens(existingData);
 				}
 			}
 		} catch (error) {

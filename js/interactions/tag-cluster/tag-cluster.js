@@ -12,6 +12,7 @@
 
 import { TagManager } from '../tag-manager.js';
 import { TagPhysics } from '../tag-physics.js';
+import { getTokenKey } from '../../utils/tokenKey.js';
 
 export class TagCluster {
 	/**
@@ -45,7 +46,7 @@ export class TagCluster {
 		this.options = {
 			maxTags: 150,                     // Maximum number of tags to display
 			updateInterval: 10000,           // How often to update tokens (ms)
-			minTagSize: 0.5,                 // Minimum tag size
+			minTagSize: 1,                 // Minimum tag size
 			maxTagSize: 5.0,                 // Maximum tag size
 			initialTagCount: 50,              // Initial number of tags
 			baseTokenUrl: 'https://dexscreener.com/ethereum/',
@@ -75,7 +76,10 @@ export class TagCluster {
 	 * Initialize the tag cluster without initial data
 	 */
 	initialize() {
+		console.log('Initializing TagCluster - checking font loaded status:', this.tagManager.fontLoaded);
+		
 		if (!this.tagManager.fontLoaded) {
+			console.log('Font not loaded yet, will retry initialization in 100ms');
 			// Wait for font to load before initializing
 			setTimeout(() => this.initialize(), 100);
 			return;
@@ -85,6 +89,13 @@ export class TagCluster {
 		this.initialized = true;
 		this.firstUpdate = true; // Flag for first update to add 30 tags
 		console.log('Tag cluster initialized, ready to add tokens dynamically');
+		
+		// Perform additional verification of TagManager
+		if (!this.tagManager.tagStyle?.font) {
+			console.warn('WARNING: Font is marked as loaded but font object is missing!');
+		} else {
+			console.log('Font object verification successful');
+		}
 	}
 	
 	/**
@@ -96,7 +107,7 @@ export class TagCluster {
 	 * 3. Updates existing token properties (size, etc.)
 	 * 4. Animates removal of tokens no longer in the dataset with a fly-out effect
 	 */
-	updateTokens(newTokens) {
+	async updateTokens(newTokens) {
 		if (!this.initialized || !newTokens) return;
 		
 		// Track the current time
@@ -119,7 +130,7 @@ export class TagCluster {
 		// Create map of new tokens by key
 		const newTokensMap = new Map();
 		newTokens.forEach(token => {
-			const key = this.getTokenKey(token);
+			const key = getTokenKey(token);
 			if (key) {
 				newTokensMap.set(key, token);
 			}
@@ -158,7 +169,7 @@ export class TagCluster {
 		// Add some new tokens
 		for (let i = 0; i < tagsToAdd; i++) {
 			if (i < tokensToAdd.length) {
-				const addedTag = this.addTokenTag(tokensToAdd[i]);
+				const addedTag = await this.addTokenTag(tokensToAdd[i]);
 				if (addedTag) {
 					console.log(`Successfully added token ${i+1}/${tagsToAdd}: ${addedTag.originalName}`);
 				} else {
@@ -186,48 +197,6 @@ export class TagCluster {
 		if (this.updateCallback) {
 			this.updateCallback(this.tokens, this.tokenTags);
 		}
-	}
-	
-	/**
-	 * Get a consistent key for a token
-	 * @param {Object} token - Token data
-	 * @returns {string} - Unique key for the token
-	 */
-	getTokenKey(token) {
-		if (!token) return null;
-		
-		// Extract chainId and tokenAddress, handling different data structures
-		let chainId = token.chainId;
-		let tokenAddress = token.tokenAddress;
-		
-		// Handle case where data is nested differently
-		if (!chainId && token.baseToken && token.baseToken.chainId) {
-			chainId = token.baseToken.chainId;
-		}
-		
-		if (!tokenAddress && token.baseToken && token.baseToken.address) {
-			tokenAddress = token.baseToken.address;
-		}
-		
-		// If we still don't have the required fields, use fallbacks
-		if (!chainId) chainId = 'eth'; // Default to Ethereum
-		
-		if (!tokenAddress) {
-			// Create a unique identifier based on what we do have
-			if (token.pairAddress) {
-				tokenAddress = token.pairAddress;
-			} else if (token.baseToken?.symbol) {
-				tokenAddress = `symbol-${token.baseToken.symbol}`;
-			} else if (token.symbol) {
-				tokenAddress = `symbol-${token.symbol}`;
-			} else {
-				// Use a timestamp as last resort
-				tokenAddress = `token-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-			}
-		}
-		
-		// Generate key for this token
-		return `${chainId}-${tokenAddress}`;
 	}
 	
 	/**
@@ -324,20 +293,43 @@ export class TagCluster {
 	/**
 	 * Add a new tag for a token
 	 * @param {Object} token - Token data from DexScreener
-	 * @returns {Object|null} - The created tag or null
+	 * @returns {Promise<Object|null>} - The created tag or null
 	 */
-	addTokenTag(token) {
+	async addTokenTag(token) {
 		if (!token) {
 			console.warn("Attempted to add null token");
 			return null;
 		}
 		
+		// Explicitly check font loading status first
+		if (!this.tagManager || !this.tagManager.fontLoaded) {
+			console.error("Cannot create tag - font not loaded yet");
+			console.log("Font loading status:", this.tagManager?.fontLoaded);
+			console.log("Will retry initialization in a moment...");
+			
+			// Wait and retry initialization
+			if (!this.initialized && this.tagManager) {
+				setTimeout(() => this.initialize(), 500);
+			}
+			return null;
+		}
+		
 		// Generate key for this token
-		const tokenKey = this.getTokenKey(token);
-		if (!tokenKey) return null;
+		const tokenKey = getTokenKey(token);
+		if (!tokenKey) {
+			console.warn("Cannot generate key for token, skipping");
+			return null;
+		}
 		
 		// Skip if already added
 		if (this.tokenTags.has(tokenKey)) {
+			return null;
+		}
+		
+		// Check that token has address for identification
+		if (!token.tokenAddress && !token.pairAddress && 
+		    !(token.baseToken && token.baseToken.address)) {
+			console.log("Token has no address for identification, skipping");
 			return null;
 		}
 		
@@ -375,31 +367,48 @@ export class TagCluster {
 		
 		console.log(`Creating tag for token: ${displaySymbol} with size ${size.toFixed(2)} and colour ${tagColour}`);
 		
-		// Create the tag
 		try {
-			const tag = this.tagManager.createTag(
-				displaySymbol,
-				tokenUrl,
-				{
-					scale: size,
-					size: 0.5,     // Base text size before scaling
-					depth: 0.65,   // Extrusion depth 
-					color: tagColour // Assign colour based on chain
-				},
-				token // Pass token data separately so TagManager can attach it correctly
-			);
-			
-			// If successful, store in our mapping
-			if (tag) {
-				this.tokenTags.set(tokenKey, tag.id);
-				// Set initial lastInteractionTime to creation time
-				tag.lastInteractionTime = tag.createdAt;
-				console.log(`Added token tag: ${displaySymbol} with size ${size.toFixed(2)} and colour ${tagColour}`);
+			// Use TagsManager's addTag method if available
+			if (window.memeCube && window.memeCube.tagsManager) {
+				// Create the tag using the centralized tagsManager.addTag method
+				const tag = await window.memeCube.tagsManager.addTag(displaySymbol, tokenUrl, size, token, {
+					source: 'tagCluster',
+					chainId: chainId,
+					color: tagColour
+				});
+				
+				// If successful, store in our mapping
+				if (tag) {
+					this.tokenTags.set(tokenKey, tag.id);
+					console.log(`Added token tag via tagsManager: ${displaySymbol}`);
+				}
+				
+				return tag;
 			} else {
-				console.error(`Failed to create tag for token: ${displaySymbol}`);
+				// Fallback to direct creation if tagsManager not available
+				const tag = this.tagManager.createTag(
+					displaySymbol,
+					tokenUrl,
+					{
+						scale: size,
+						size: 0.5,     // Base text size before scaling
+						depth: 0.65,   // Extrusion depth 
+						color: tagColour, // Assign colour based on chain
+						source: 'tagCluster'
+					},
+					token // Pass token data separately so TagManager can attach it correctly
+				);
+				
+				// If successful, store in our mapping
+				if (tag) {
+					this.tokenTags.set(tokenKey, tag.id);
+					// Set initial lastInteractionTime to creation time
+					tag.lastInteractionTime = tag.createdAt;
+					console.log(`Added token tag directly: ${displaySymbol}`);
+				}
+				
+				return tag;
 			}
-			
-			return tag;
 		} catch (error) {
 			console.error(`Error creating tag for token ${displaySymbol}:`, error);
 			return null;
@@ -417,7 +426,7 @@ export class TagCluster {
 		}
 		
 		// Generate key for this token
-		const tokenKey = this.getTokenKey(token);
+		const tokenKey = getTokenKey(token);
 		if (!tokenKey) return false;
 		
 		// Get existing tag ID
@@ -596,12 +605,41 @@ export class TagCluster {
 	
 	/**
 	 * Update function to be called every frame
+	 * @param {number} deltaTime - Time since last update
 	 */
-	update() {
-		// Update tag manager
+	update(deltaTime) {
+		// Track update frequency to limit updates
+		if (!this._lastUpdateTime) {
+			this._lastUpdateTime = 0;
+			this._updateCounter = 0;
+		}
+		
+		this._updateCounter++;
+		
+		// Only update every 2 frames to reduce performance impact
+		if (this._updateCounter % 2 !== 0) {
+			return;
+		}
+		
+		// Further limit full updates to reduce physics calculations
+		const now = performance.now();
+		const timeSinceLastUpdate = now - this._lastUpdateTime;
+		
+		// If we're updating frequently (due to high FPS), limit physics updates
+		// to no more than 30 times per second (33ms intervals)
+		if (timeSinceLastUpdate < 33 && this.tagManager && this.tagManager.tags.length > 20) {
+			// For large tag counts, further reduce update frequency
+			if (this.tagManager.tags.length > 40 && this._updateCounter % 4 !== 0) {
+				return;
+			}
+		}
+		
+		// Update tag manager with performance considerations
 		if (this.tagManager) {
 			this.tagManager.update();
 		}
+		
+		this._lastUpdateTime = now;
 	}
 	
 	/**

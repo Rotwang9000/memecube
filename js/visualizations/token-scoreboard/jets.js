@@ -11,15 +11,26 @@ export class JetsManager {
 		this.jetsGroup = new THREE.Group();
 		this.lastMovementTime = 0;
 		this.jetFadeSpeed = 1.2; // Reduced fade speed for longer-lasting particles
+		this._needsTestEmission = true; // Set to true to emit test particles on first update
 		
 		// Add jets group to parent
 		this.parentGroup.add(this.jetsGroup);
+		
+		// Make sure the group is visible and has high render order
+		this.jetsGroup.visible = true;
+		this.jetsGroup.renderOrder = 1000;
 		
 		// Create jet effects
 		this.createCornerJets();
 		
 		// Initialize jet positions
 		this.syncJetsWithBolts(true);
+		
+		// Force visible particles on startup after a short delay
+		setTimeout(() => {
+			console.log("Initial particle burst for visibility testing");
+			this.forceTestParticles();
+		}, 500);
 	}
 	
 	/**
@@ -32,7 +43,7 @@ export class JetsManager {
 		// Create each jet for each bolt
 		this.cornerBolts.forEach((bolt, boltIndex) => {
 			// Create geometry for jet particles - increased count for more visible effect
-			const particleCount = 150; // Increased from 100 for more visible effect
+			const particleCount = 200; // Increased from 150 for more visible effect
 			const jetGeometry = new THREE.BufferGeometry();
 			const positions = new Float32Array(particleCount * 3);
 			const colors = new Float32Array(particleCount * 3);
@@ -54,7 +65,7 @@ export class JetsManager {
 				colors[i * 3 + 2] = 0.8 + Math.random() * 0.2; // B - bright blue
 				
 				// Larger sizes for more visibility
-				sizes[i] = 0.06 + Math.random() * 0.08; // Doubled size
+				sizes[i] = 0.1 + Math.random() * 0.12; // Increased size for better visibility
 				
 				// Initialize opacity to 0
 				opacities[i] = 0;
@@ -81,7 +92,7 @@ export class JetsManager {
 						vColor = color;
 						vOpacity = opacity;
 						vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-						gl_PointSize = size * (400.0 / -mvPosition.z); // Increased from 300 to 400 for larger particles
+						gl_PointSize = size * (500.0 / -mvPosition.z); // Increased from 400 to 500 for larger particles
 						gl_Position = projectionMatrix * mvPosition;
 					}
 				`,
@@ -92,16 +103,20 @@ export class JetsManager {
 					
 					void main() {
 						gl_FragColor = vec4(vColor, vOpacity) * texture2D(pointTexture, gl_PointCoord);
+						if (gl_FragColor.a < 0.1) discard; // Discard nearly transparent fragments
 					}
 				`,
 				blending: THREE.AdditiveBlending,
 				depthWrite: false,
+				depthTest: false, // Disable depth testing to ensure particles are always visible
 				transparent: true,
 				vertexColors: true
 			});
 			
 			// Create the jet particle system
 			const jetSystem = new THREE.Points(jetGeometry, jetMaterial);
+			jetSystem.renderOrder = 1000; // Very high render order to ensure visibility
+			jetSystem.frustumCulled = false; // Prevent frustum culling which might hide particles
 			
 			// Store jet data for animation - explicitly link to the bolt
 			this.jets.push({
@@ -127,22 +142,24 @@ export class JetsManager {
 	 */
 	createStarTexture() {
 		const canvas = document.createElement('canvas');
-		canvas.width = 64;
-		canvas.height = 64;
+		canvas.width = 128; // Increased from 64 for higher resolution
+		canvas.height = 128; // Increased from 64 for higher resolution
 		const ctx = canvas.getContext('2d');
 		
 		// Clear canvas
-		ctx.clearRect(0, 0, 64, 64);
+		ctx.clearRect(0, 0, 128, 128);
+		
+		// Set center point
+		const centerX = 64;
+		const centerY = 64;
 		
 		// Draw sharp star (more points for finer detail)
 		ctx.fillStyle = 'white';
 		ctx.beginPath();
 		
 		// Draw a more pointed 8-point star - larger outer radius for more dramatic effect
-		const outerRadius = 32; // Increased from 30
-		const innerRadius = 8;  // Reduced from 10 for sharper points
-		const centerX = 32;
-		const centerY = 32;
+		const outerRadius = 60; // Increased from 32 for larger texture
+		const innerRadius = 12;  // Reduced from 8 for sharper points
 		
 		for (let i = 0; i < 16; i++) {
 			const radius = i % 2 === 0 ? outerRadius : innerRadius;
@@ -160,16 +177,32 @@ export class JetsManager {
 		ctx.closePath();
 		ctx.fill();
 		
-		// Draw glow - stronger, more pronounced glow
-		const gradient = ctx.createRadialGradient(centerX, centerY, innerRadius, centerX, centerY, outerRadius + 15);
-		gradient.addColorStop(0, 'rgba(255, 255, 255, 0.9)'); // Brighter core (0.8 → 0.9)
-		gradient.addColorStop(0.2, 'rgba(255, 255, 255, 0.6)'); // Added intermediate stop
-		gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.3)'); // Added intermediate stop
-		gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+		// Draw stronger glow with multiple layers
+		const gradientLayers = [
+			{ stop1: 0, stop2: 0.4, alpha1: 0.9, alpha2: 0.6 },
+			{ stop1: 0.4, stop2: 0.7, alpha1: 0.6, alpha2: 0.3 },
+			{ stop1: 0.7, stop2: 1.0, alpha1: 0.3, alpha2: 0 }
+		];
 		
-		ctx.globalCompositeOperation = 'screen';
-		ctx.fillStyle = gradient;
-		ctx.fillRect(0, 0, 64, 64);
+		// First clear with a solid white center
+		ctx.fillStyle = 'rgba(255, 255, 255, 1.0)';
+		ctx.beginPath();
+		ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+		ctx.fill();
+		
+		// Now add gradient layers for better glow effect
+		gradientLayers.forEach(layer => {
+			const gradient = ctx.createRadialGradient(
+				centerX, centerY, outerRadius * layer.stop1,
+				centerX, centerY, outerRadius * layer.stop2
+			);
+			gradient.addColorStop(0, `rgba(255, 255, 255, ${layer.alpha1})`);
+			gradient.addColorStop(1, `rgba(255, 255, 255, ${layer.alpha2})`);
+			
+			ctx.globalCompositeOperation = 'lighter';
+			ctx.fillStyle = gradient;
+			ctx.fillRect(0, 0, 128, 128);
+		});
 		
 		// Create texture from canvas
 		const texture = new THREE.CanvasTexture(canvas);
@@ -194,6 +227,9 @@ export class JetsManager {
 		// Determine if this is part of an animated movement
 		const isAnimated = this.isMoving;
 		
+		// Always emit some test particles to ensure visibility
+		console.log("Activating jets with direction:", moveDir);
+		
 		// Go through each jet
 		this.jets.forEach((jet, index) => {
 			// Skip top jets if requested (used during tall mode transition)
@@ -208,17 +244,27 @@ export class JetsManager {
 			const activation = -cornerVector.dot(moveDir);
 			
 			// Lower threshold for activation and ensure some activation regardless of direction
-			const effectiveActivation = Math.max(0.2, activation); // At least 0.2 activation
+			const effectiveActivation = Math.max(0.3, activation); // At least 0.3 activation (increased from 0.2)
 			
-			if (effectiveActivation > 0.05) { // Reduced threshold to activate more often
-				// Emit new particles - more during animation
-				const particleCount = Math.ceil(effectiveActivation * (isAnimated ? 30 : 15)); // Increased from 20/10
-				// Create direction vector with inverted Y
-				const correctedMoveDir = moveDir.clone().multiplyScalar(-1);
-				correctedMoveDir.y = -correctedMoveDir.y;
-				for (let i = 0; i < particleCount; i++) {
-					this.emitJetParticle(jet, correctedMoveDir, effectiveActivation * (isAnimated ? 2.0 : 1.5)); // Increased intensity
-				}
+			// Always emit at least some particles for testing
+			const particleCount = Math.ceil(effectiveActivation * (isAnimated ? 40 : 25)); // Increased from 30/15
+			
+			// Create direction vector with inverted Y
+			const correctedMoveDir = moveDir.clone().multiplyScalar(-1);
+			correctedMoveDir.y = -correctedMoveDir.y;
+			
+			// Emit particles from this jet
+			console.log(`Emitting ${particleCount} particles from jet ${index} with activation ${effectiveActivation.toFixed(2)}`);
+			for (let i = 0; i < particleCount; i++) {
+				this.emitJetParticle(jet, correctedMoveDir, effectiveActivation * (isAnimated ? 2.5 : 2.0)); // Increased intensity
+			}
+		});
+		
+		// Force all jet systems to be visible
+		this.jets.forEach(jet => {
+			if (jet.system) {
+				jet.system.visible = true;
+				jet.system.renderOrder = 1000;
 			}
 		});
 	}
@@ -241,7 +287,7 @@ export class JetsManager {
 		const positions = jet.geometry.attributes.position.array;
 		positions[particleIndex * 3] = jet.basePosition.x + (Math.random() - 0.5) * 0.15; // Increased spread
 		positions[particleIndex * 3 + 1] = jet.basePosition.y + (Math.random() - 0.5) * 0.15;
-		positions[particleIndex * 3 + 2] = jet.basePosition.z + (Math.random() - 0.5) * 0.15;
+		positions[particleIndex * 3 + 2] = jet.basePosition.z; // Ensure Z position is exactly at bolt position for visibility
 		
 		// Set velocity - opposite to movement direction with randomness
 		// Ensure moveDir is a Vector3
@@ -250,12 +296,13 @@ export class JetsManager {
 			: new THREE.Vector3(0, 0, -1);
 			
 		// Create velocity - direction should already be corrected by the caller
+		// Move particles more toward the camera (negative Z direction)
 		particle.velocity.copy(oppositeDir)
-			.multiplyScalar(0.08 + Math.random() * 0.12 * intensity) // Faster particles (0.05/0.08 → 0.08/0.12)
+			.multiplyScalar(0.1 + Math.random() * 0.15 * intensity) // Faster particles
 			.add(new THREE.Vector3(
 				(Math.random() - 0.5) * 0.03, // Increased spread (0.02 → 0.03)
 				(Math.random() - 0.5) * 0.03,
-				(Math.random() - 0.5) * 0.03
+				-0.05 - Math.random() * 0.05 * intensity // Added bias toward camera
 			));
 		
 		// Update colors based on intensity - brighter for higher intensity
@@ -269,11 +316,17 @@ export class JetsManager {
 		
 		// Set size based on intensity - larger particles
 		const sizes = jet.geometry.attributes.size.array;
-		sizes[particleIndex] = (0.06 + Math.random() * 0.08) * (1.0 + intensityBoost * 1.5); // Increased size multiplier
+		sizes[particleIndex] = (0.1 + Math.random() * 0.12) * (1.0 + intensityBoost * 1.5); // Increased size multiplier
 		
 		// Set opacity to full
 		const opacities = jet.geometry.attributes.opacity.array;
 		opacities[particleIndex] = 1.0;
+		
+		// Force system to be visible when emitting particles
+		if (jet.system) {
+			jet.system.visible = true;
+			jet.system.renderOrder = 1000;
+		}
 		
 		// Mark attributes as needing update
 		jet.geometry.attributes.position.needsUpdate = true;
@@ -323,7 +376,7 @@ export class JetsManager {
 				const lifeRatio = particle.life / particle.maxLife;
 				// Use linear fade for longer visibility
 				opacities[index] = Math.max(0.2, lifeRatio * lifeRatio * 1.2); // Maintain some opacity longer
-				sizes[index] = (0.06 + Math.random() * 0.08) * (0.7 + lifeRatio * 0.6); // Larger base size and slower shrink
+				sizes[index] = (0.1 + Math.random() * 0.12) * (0.7 + lifeRatio * 0.6); // Larger base size and slower shrink
 			} else {
 				// Make completely invisible when dead
 				opacities[index] = 0;
@@ -346,6 +399,30 @@ export class JetsManager {
 		this.jets.forEach(jet => {
 			this.updateJetParticles(jet, deltaTime || 1/60);
 		});
+		
+		// Check if we should emit test particles 
+		if (this._needsTestEmission && this.jets && this.jets.length > 0) {
+			this._needsTestEmission = false;
+			console.log("Emitting test particles to verify jet system");
+			
+			// Emit test particles from each jet
+			this.jets.forEach(jet => {
+				// Create random direction with strong backwards Z component
+				const testDirection = new THREE.Vector3(
+					(Math.random() - 0.5) * 0.5,
+					(Math.random() - 0.5) * 0.5,
+					-1.0
+				).normalize();
+				
+				// Emit a burst of particles
+				for (let i = 0; i < 30; i++) {
+					this.emitJetParticle(jet, testDirection, 1.5);
+				}
+			});
+			
+			// Update last movement time to prevent immediate fade
+			this.lastMovementTime = performance.now();
+		}
 	}
 	
 	/**
@@ -359,17 +436,44 @@ export class JetsManager {
 			return;
 		}
 		
+		// Make sure the jets group is visible
+		if (this.jetsGroup) {
+			this.jetsGroup.visible = true;
+			this.jetsGroup.traverse(obj => {
+				if (obj instanceof THREE.Points) {
+					obj.visible = true;
+				}
+			});
+		}
+		
+		// Ensure we have the same number of jets as bolts for proper synchronization
+		const minLength = Math.min(this.jets.length, this.cornerBolts.length);
+		
 		// For each jet, find its bolt and update position
-		for (let i = 0; i < this.jets.length; i++) {
+		for (let i = 0; i < minLength; i++) {
 			const jet = this.jets[i];
 			const bolt = this.cornerBolts[i]; // Direct indexing since they should match
 			
-			if (bolt && (i < this.cornerBolts.length)) {
+			if (bolt) {
+				// Skip if bolt isn't visible
+				if (!bolt.visible) {
+					console.log(`Bolt ${i} not visible, skipping jet sync`);
+					continue;
+				}
+				
 				// Store previous position to detect movement
 				const previousPosition = jet.basePosition.clone();
 				
-				// Update jet position to match bolt
+				// Update jet position to match bolt precisely
 				jet.basePosition.copy(bolt.position);
+				
+				// Set system position to match bolt as well
+				if (jet.system) {
+					// Ensure particle system position matches bolt and jet position
+					if (!jet.system.position.equals(bolt.position)) {
+						jet.system.position.copy(bolt.position);
+					}
+				}
 				
 				// Only check for movement if not forcing an update
 				if (!forceUpdate) {
@@ -396,8 +500,27 @@ export class JetsManager {
 						this.lastMovementTime = performance.now();
 					}
 				} else if (forceUpdate) {
-					// On force update, just ensure the position is correct without emitting particles
-					console.log(`Initializing jet ${i} position to match bolt: ${bolt.position.x.toFixed(2)}, ${bolt.position.y.toFixed(2)}, ${bolt.position.z.toFixed(2)}`);
+					// On force update, ensure particles stay attached to bolts
+					console.log(`Syncing jet ${i} with bolt position: ${bolt.position.x.toFixed(2)}, ${bolt.position.y.toFixed(2)}, ${bolt.position.z.toFixed(2)}`);
+					
+					// Force update the jet particles with the new position
+					const positions = jet.geometry.attributes.position.array;
+					for (let p = 0; p < jet.particles.length; p++) {
+						const particle = jet.particles[p];
+						
+						// Only update particles that haven't been emitted yet (life <= 0)
+						if (particle.life <= 0) {
+							positions[p * 3] = bolt.position.x;
+							positions[p * 3 + 1] = bolt.position.y;
+							positions[p * 3 + 2] = bolt.position.z;
+						}
+					}
+					
+					// Mark positions as needing update
+					jet.geometry.attributes.position.needsUpdate = true;
+					
+					// When forcing update, set a flag to emit test particles on next update
+					this._needsTestEmission = Math.random() < 0.3; // 30% chance to emit test particles
 				}
 			} else {
 				console.warn(`No matching bolt found for jet ${i}`);
@@ -425,5 +548,42 @@ export class JetsManager {
 		
 		this.jets = [];
 		this.cornerBolts = null;
+	}
+	
+	/**
+	 * Force test particles to be emitted from all jets
+	 * Used for debugging visibility issues
+	 */
+	forceTestParticles() {
+		if (!this.jets || this.jets.length === 0) return;
+		
+		console.log("Forcing test particles from all jets");
+		
+		this.jets.forEach((jet, index) => {
+			// Create test direction - strongly toward camera (negative Z)
+			const testDirection = new THREE.Vector3(
+				(Math.random() - 0.5) * 0.2,
+				(Math.random() - 0.5) * 0.2,
+				-1.0
+			).normalize();
+			
+			// Emit many particles for high visibility
+			for (let i = 0; i < 40; i++) {
+				this.emitJetParticle(jet, testDirection, 2.0);
+			}
+			
+			// Ensure system is visible
+			if (jet.system) {
+				jet.system.visible = true;
+				jet.system.renderOrder = 1000;
+				
+				// Debug info
+				console.log(`Jet ${index} system: visible=${jet.system.visible}, renderOrder=${jet.system.renderOrder}`);
+				console.log(`Base position: x=${jet.basePosition.x.toFixed(2)}, y=${jet.basePosition.y.toFixed(2)}, z=${jet.basePosition.z.toFixed(2)}`);
+			}
+		});
+		
+		// Update last movement time to prevent immediate fade
+		this.lastMovementTime = performance.now();
 	}
 } 

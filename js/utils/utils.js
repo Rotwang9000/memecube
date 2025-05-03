@@ -4,6 +4,9 @@ import * as THREE from 'three';
  * Utility functions for the application
  */
 
+// For token key generation, see also tokenKey.js which provides
+// consistent token identification utilities across the application.
+
 export class Utils {
 	constructor() {
 		this.messageTimeout = null;

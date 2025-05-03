@@ -19,23 +19,26 @@ export class TagPhysics {
         this.tagManager = options.tagManager || null;
         this.options = {
             cubeSize: options.initialCubeSize || 10, // Initial cube size - will adjust dynamically
-            spacing: 0.05,             // Further reduced spacing between tags for closer packing
-            centralForce: 0.1,         // Stronger force pulling tags toward centre
-            surfaceForce: 0.005,        // Reduced force to allow closer packing
-            damping: 250.0,            // Further increased damping to reduce flickering and feedback loops
-            maxSpeed: 0.5,             // Reduced max speed for slower movement
-            collisionForce: 0.05,      // Significantly reduced collision force for smoother minimal adjustments
-            faceBalanceFactor: 0.15,    // Increased factor for balancing tags across faces (favoring vertical faces)
+            spacing: 0.005,            // Reduced spacing for closer clumping
+            centralForce: 22.5,      // Further increased central force for even tighter clumping
+            surfaceForce: 0.0005,      // Reduced surface force to prevent excessive spread
+            damping: 150.0,           // Damping to reduce flickering and feedback loops
+            maxSpeed: 0.8,            // Max speed for movement
+            collisionForce: 0.05,     // Reduced collision force for gentler pushing
+            faceBalanceFactor: 0.15,  // Factor for balancing tags across faces
             flipAnimationDuration: 750, // Duration in ms for flip to face animation
-            initialMoveSpeed: 0.2,     // Doubled initial movement to kick‑start flight
-            easingFactor: 0.05,         // Significantly increased easing factor for faster acceleration
-            cubeGravityStrength: 0.005, // Reduced strength of gravity pulling tags toward cube faces
-            postRotationBoost: 0.015,   // Reduced boost force after rotation to form tighter cube
-            collisionPushScale: 0.1,    // Reduced scale for collision pushback during rotation/resize for smoother adjustments
-            easingCurveExponent: 1.8,   // Slightly reduced exponent for faster initial movement
+            initialMoveSpeed: 0.3,     // Initial movement to kick-start flight
+            easingFactor: 0.03,        // Easing factor for acceleration
+            cubeGravityStrength: 0.05, // Reduced strength of gravity pulling tags toward cube faces
+            postRotationBoost: 0.2,   // Boost force after rotation to form cube
+            collisionPushScale: 0.2,   // Scale for collision pushback during rotation/resize
+            easingCurveExponent: 1.5,  // Exponent for initial movement curve
             flipCollisionIterations: 3, // Number of collision resolution iterations during flip
             preventFlipOverlap: true,   // Prevent flipping if it would cause severe overlaps
-            minFlipSpacing: 0.2,        // Reduced minimum clear space required to allow flipping
+            minFlipSpacing: 0.2,        // Minimum clear space required to allow flipping
+            stationaryRecheckInterval: 0.1, // Interval to recheck stationary tags
+            velocityThreshold: 0.1,      // Threshold for considering a tag as moving
+            positionThreshold: 0.1,      // Threshold for considering a tag as in target position
             ...options
         };
 
@@ -68,37 +71,44 @@ export class TagPhysics {
      */
     addNewTag(tag, allTags) {
         if (!tag || !tag.mesh) {
-            if (this.DEBUG_MODE) console.error('Invalid tag passed to addNewTag');
+            console.error("Tried to add a tag without a mesh to physics");
             return false;
         }
-
-        // Determine which face to place the tag on (least populated)
-        const targetFace = this.getLeastPopulatedFace();
-        // Assign face to tag for orientation and positioning
-        tag.physicsFace = targetFace;
-        // Increment face count
-        this.faceCounts[targetFace]++;
-
-        // Set initial position far outside the cube at a random angle
+        
+        // Calculate initial position
         const initialPosition = this.getRandomSphericalPosition();
+        
+        // Set tag mesh position
         tag.mesh.position.copy(initialPosition);
-        if (this.DEBUG_MODE) console.log(`Tag ${tag.id} initial position:`, initialPosition);
+        
+        // Assign a random face for this tag to move toward
+        const targetFace = this.getLeastPopulatedFace(allTags);
+        
+        // Store the target face on the tag early so orientation & rotation logic can use it
+        tag.physicsFace = targetFace;
+        
+        // Increment face count for distribution tracking
+        this.faceCounts[targetFace] = (this.faceCounts[targetFace] || 0) + 1;
+        
+        // Calculate initial velocity toward center
+        const initialVelocity = new THREE.Vector3(0, 0, 0);
+        
+        // Calculate mass based on tag size but with logarithmic scaling for smaller tags
+        // This gives smaller tags proportionally higher mass to prevent them being flung around
+        const baseSize = Math.max(tag.size || 1.0, 0.1);
+        const size = Math.max(tag.mesh.scale.x, 0.5); // Ensure a minimum size of 0.5
 
-        // Set orientation to fly in on its end towards the center, aligned with a cube axis
+        // Logarithmic mass calculation: 
+        // - Smaller tags get higher mass relative to their size
+        // - Larger tags get lower mass relative to their size
+        // This creates a more balanced physics system
+        const logFactor = 1 - Math.log10(Math.min(size, 10)) / Math.log10(10);
+        const massFactor = 0.5 + logFactor * 0.5; // Ranges from 0.5 to 1.0
+        const mass = Math.max(size * massFactor, 0.5); // Ensure minimum mass of 0.5
+        
+        // Set initial orientation & store target rotation for flip animation
         this.setTagFlyInOrientation(tag, initialPosition);
-
-        // Calculate mass based on size (larger tags have more mass)
-        const size = tag.mesh.scale.x;
-        const mass = 1.0 + (size - 1.0) * 2.0; // Increased mass influence for larger tags
-
-        // Calculate initial velocity aiming towards the center with further reduced force for even slower movement
-        const directionToCenter = new THREE.Vector3(0, 0, 0).sub(initialPosition).normalize();
-        const initialVelocity = directionToCenter.multiplyScalar(this.options.maxSpeed * 0.5); // Reduced from 0.8 to 0.5 for even slower fly-in
-        if (this.DEBUG_MODE) console.log(`Tag ${tag.id} initial velocity vector:`, initialVelocity, 'magnitude:', initialVelocity.length());
-
-        // Compute bounding box for collision detection
-        this.updateTagBoundingBox(tag);
-
+        
         // Add physics data to tag
         const physicsData = {
             velocity: initialVelocity,
@@ -109,19 +119,16 @@ export class TagPhysics {
             lastCollisionTime: 0,
             face: targetFace,
             targetPosition: initialPosition.clone(),
-            // Use elapsed time from clock instead of absolute timestamps
             creationElapsedTime: this.clock.getElapsedTime(),
             lastInteractionElapsedTime: this.clock.getElapsedTime(),
-            // Flag to track initial movement phase
             initialMovement: true,
-            // Track frames for debugging
             frameCount: 0,
-            forceDirectMove: true, // Flag to force direct movement regardless of physics in first frames
-            speedFactor: 0.05, // Start with higher initial speed factor
-            collisionPushback: new THREE.Vector3(0, 0, 0), // Track collision pushback force
-            easeProgress: 0.0, // Track easing progress for non-linear easing
-            postRotationMoveEnabled: false, // Enable post-rotation movement flag
-            postRotationStartTime: 0 // When post-rotation movement started
+            forceDirectMove: true,
+            speedFactor: 0.05,
+            collisionPushback: new THREE.Vector3(0, 0, 0),
+            easeProgress: 0.0,
+            postRotationMoveEnabled: false,
+            postRotationStartTime: 0
         };
         this.tags.set(tag.id, physicsData);
         tag.physics = physicsData;
@@ -146,14 +153,7 @@ export class TagPhysics {
         // Update cube size based on new tag
         this.updateCubeSize();
         
-        // Force an initial movement with high velocity to ensure tag starts moving
-        const forcedMovement = directionToCenter.clone().multiplyScalar(0.5);
-        tag.mesh.position.add(forcedMovement);
-        
-        if (this.DEBUG_MODE) {
-            console.log(`Applied initial forced movement of ${forcedMovement.length()} units to tag ${tag.id}`);
-        }
-
+        // Return success
         return true;
     }
 
@@ -348,21 +348,6 @@ export class TagPhysics {
             case 'nz': return new THREE.Euler(0, -Math.PI / 2 + flipY, -Math.PI / 2);
             default: return new THREE.Euler(0, flipY, 0);
         }
-        
-        /* Alternative implementation for consistent orientation:
-        To use this version instead, replace the code above with this block.
-        This ensures text is oriented consistently when viewing cube from above/below:
-        
-        switch (face) {
-            case 'px': return new THREE.Euler(0, 0, Math.PI / 2); 
-            case 'nx': return new THREE.Euler(0, Math.PI, -Math.PI / 2);
-            case 'py': return new THREE.Euler(Math.PI / 2, 0, 0); 
-            case 'ny': return new THREE.Euler(-Math.PI / 2, Math.PI, 0); // Flipped to be consistent with py
-            case 'pz': return new THREE.Euler(0, Math.PI / 2, Math.PI / 2);
-            case 'nz': return new THREE.Euler(0, -Math.PI / 2, -Math.PI / 2);
-            default: return new THREE.Euler(0, 0, 0);
-        }
-        */
     }
 
     /**
@@ -534,23 +519,23 @@ export class TagPhysics {
             // Calculate distance and direction
             const distance = tagCenter.distanceTo(otherCenter);
             const combinedSize = (physicsData.size + otherPhysics.size);
-            const requiredSpace = combinedSize * 1.1; // 10% extra spacing
+            const requiredSpace = combinedSize * 1.2; // 20% extra spacing
             
             // If too close, push away gently and smoothly
             if (distance < requiredSpace) {
                 // Calculate direction and a gentler force
                 const direction = otherCenter.clone().sub(tagCenter).normalize();
-                const pushForce = (requiredSpace - distance) * 0.1 * forceFactor; // Reduced force for smoother movement
+                const pushForce = (requiredSpace - distance) * 0.2 * forceFactor; // Force for smoother movement
                 
-                // Apply a smaller velocity change for smoother movement over time
+                // Apply a velocity change for smoother movement over time
                 otherPhysics.velocity.add(direction.multiplyScalar(pushForce));
                 
                 // Reset any immovability on the pushed tag to allow movement
                 otherPhysics.immovableUntil = 0;
                 
                 // Avoid immediate position adjustment unless overlap is severe
-                if (distance < combinedSize * 0.8) { // Adjusted threshold for severe overlap
-                    const adjustment = direction.clone().multiplyScalar((combinedSize * 0.8) - distance);
+                if (distance < combinedSize * 0.7) {
+                    const adjustment = direction.clone().multiplyScalar((combinedSize * 0.7) - distance);
                     otherTag.mesh.position.add(adjustment);
                 }
                 
@@ -565,6 +550,18 @@ export class TagPhysics {
      * Update physics simulation - main update loop
      */
     update() {
+        // Performance monitoring
+        const perfStart = performance.now();
+        const perfMetrics = {
+            total: 0,
+            deltaTime: 0,
+            collisions: 0,
+            tagUpdates: 0,
+            overlapResolution: 0,
+            cleanup: 0,
+            tags: this.tags.size
+        };
+        
         // Skip physics update if document is not visible or simulation is paused
         if (!this.isDocumentVisible || this.isPaused) {
             // Reset the clock when we're paused to avoid large delta on resume
@@ -575,6 +572,7 @@ export class TagPhysics {
         }
 
         // Use THREE.Clock for consistent timing
+        const dtStart = performance.now();
         const deltaTime = Math.min(this.clock.getDelta(), 0.05); // Cap at 50ms (20fps minimum)
         this.lastDeltaTime = deltaTime;
 
@@ -583,47 +581,149 @@ export class TagPhysics {
         
         // Get current elapsed time for time-based calculations
         const currentElapsedTime = this.clock.getElapsedTime();
+        perfMetrics.deltaTime = performance.now() - dtStart;
+
+        // Clean up any invalid tag references that might cause errors
+        const cleanupStart = performance.now();
+        this.cleanupInvalidTags();
+        perfMetrics.cleanup = performance.now() - cleanupStart;
+        
+        // Track tags that need floating effects
+        const flippedStationaryTags = [];
         
         // Flag to track if we found any stationary tags that should be moving
         let foundStationaryTags = false;
 
-        // Process each tag individually
-        for (const [tagId, physicsData] of this.tags) {
-            // Check if we have any tags that aren't moving but should be
-            const age = currentElapsedTime - (physicsData.creationElapsedTime || 0);
-            if (age < 5.0 && (!physicsData.velocity || physicsData.velocity.lengthSq() < 0.001)) {
-                foundStationaryTags = true;
-                console.log(`Found stationary tag ${tagId} at age ${age} - resetting velocity`);
-                
-                // If we find an early tag that's not moving, reset its velocity toward center
+        // Process each tag
+        const tagUpdateStart = performance.now();
+        for (const [tagId, physicsData] of this.tags.entries()) {
+            // Collect flipped stationary tags for floating effects
+            if (physicsData.flipCompleted && 
+                (!physicsData.isMoving || physicsData.velocity.length() < 0.1)) {
                 const tag = this.getTagById(tagId);
                 if (tag && tag.mesh) {
-                    const toCenter = new THREE.Vector3(0, 0, 0).sub(tag.mesh.position).normalize();
-                    physicsData.velocity = toCenter.multiplyScalar(this.options.maxSpeed * 0.5);
-                    physicsData.forceDirectMove = true;
-                    physicsData.frameCount = 0; // Reset frame count to restart entry sequence
+                    flippedStationaryTags.push({tag, physicsData});
                 }
             }
             
-            // Handle removal animation if tag is being removed
-            if (physicsData.isRemoving) {
-                this.handleRemovalAnimation(tagId, physicsData, currentElapsedTime);
-            } else {
-                this.updateSingleTag(tagId, physicsData, normalizedDeltaTime, currentElapsedTime);
+            // Skip tags that have been fully processed and are stationary,
+            // unless they're older than our recheck interval
+            if (!physicsData.isMoving) {
+                const timeSinceLastInteraction = currentElapsedTime - (physicsData.lastInteractionElapsedTime || 0);
+                if (timeSinceLastInteraction < this.options.stationaryRecheckInterval) {
+                    continue;
+                } else {
+                    // Time to recheck this stationary tag
+                    foundStationaryTags = true;
+                }
+            }
+
+            // Update this tag's physics and position
+            this.updateSingleTag(tagId, physicsData, normalizedDeltaTime, currentElapsedTime);
+            
+            // Reset isMoving flag - will be set to true if actually moving
+            physicsData.isMoving = false;
+            
+            // Check if tag is still moving based on velocity threshold
+            const speed = physicsData.velocity ? physicsData.velocity.length() : 0;
+            if (speed > this.options.velocityThreshold) {
+                physicsData.isMoving = true;
+            }
+            
+            // Also check if the tag is in its target position
+            if (physicsData.targetPosition) {
+                const tagObject = this.getTagById(tagId);
+                if (tagObject && tagObject.mesh && tagObject.mesh.position) {
+                    const distanceToTarget = physicsData.targetPosition.distanceTo(tagObject.mesh.position);
+                    if (distanceToTarget > this.options.positionThreshold) {
+                        physicsData.isMoving = true;
+                    }
+                } else {
+                    // If tag doesn't exist or has no mesh, mark it for cleanup
+                    console.warn(`Tag ${tagId} referenced in physics but doesn't exist or has no mesh - will be cleaned up`);
+                    this.tags.delete(tagId);
+                }
+            }
+        }
+        perfMetrics.tagUpdates = performance.now() - tagUpdateStart;
+
+        // Apply floating effects to all flipped stationary tags
+        // This ensures the floating effect works even if tag updates are skipped
+        if (flippedStationaryTags.length > 0) {
+            this.applyFloatingEffects(flippedStationaryTags, currentElapsedTime);
+        }
+
+        // Ensure tags don't overlap after all updates
+        const collisionStart = performance.now();
+        this.ensureNoOverlap(2); // Reduced iterations for performance (was 4)
+        perfMetrics.overlapResolution = performance.now() - collisionStart;
+        
+        // Calculate total time and log if it's too high  
+        perfMetrics.total = performance.now() - perfStart;
+        if (perfMetrics.total > 10) { // Log if over 10ms
+            console.log('Physics performance:', perfMetrics);
+        }
+    }
+    
+    /**
+     * Apply floating effects to flipped stationary tags
+     * @param {Array} tags - Array of {tag, physicsData} objects to apply floating to
+     * @param {number} currentElapsedTime - Current elapsed time
+     */
+    applyFloatingEffects(tags, currentElapsedTime) {
+        // Get current time for smooth oscillation
+        const currentTime = currentElapsedTime;
+        
+        for (const {tag, physicsData} of tags) {
+            // Use tag ID to create different oscillation patterns for each tag
+            const tagIdSum = physicsData.uniqueFloatOffset || this.createUniqueFloatOffset();
+            physicsData.uniqueFloatOffset = tagIdSum;
+            
+            // Create smooth oscillations with different frequencies and phases
+            // This creates a much more natural, wavy floating motion
+            const floatStrength = 0.02; // More reasonable value for direct position changes
+            
+            // Calculate smooth floating forces using sine waves with different frequencies
+            const floatX = Math.sin(currentTime * 0.7 + tagIdSum) * floatStrength;
+            const floatY = Math.sin(currentTime * 0.5 + tagIdSum * 1.3) * floatStrength;
+            const floatZ = Math.sin(currentTime * 0.6 + tagIdSum * 0.7) * floatStrength;
+            
+            // Create float vector
+            const floatVector = new THREE.Vector3(floatX, floatY, floatZ);
+            
+            // Directly modify position to bypass damping
+            tag.mesh.position.add(floatVector);
+            
+            // Reset any velocity that might counteract our position change
+            physicsData.velocity.set(0, 0, 0);
+            
+            // Update bounding box after position change
+            this.updateTagBoundingBox(tag);
+        }
+    }
+    
+    /**
+     * Clean up any invalid tag references in the physics system
+     * This prevents errors when trying to access properties of deleted tags
+     */
+    cleanupInvalidTags() {
+        const tagsToRemove = [];
+        
+        // Find tags that don't exist or have no mesh
+        for (const [tagId, physicsData] of this.tags.entries()) {
+            const tag = this.getTagById(tagId);
+            if (!tag || !tag.mesh) {
+                tagsToRemove.push(tagId);
             }
         }
         
-        // If we found stationary tags, dump some debug info
-        if (foundStationaryTags && this.DEBUG_MODE) {
-            console.log(`Clock elapsed time: ${currentElapsedTime}, delta: ${deltaTime}`);
-            console.log(`Total tags: ${this.tags.size}`);
+        // Remove invalid tags
+        if (tagsToRemove.length > 0) {
+            console.log(`Cleaning up ${tagsToRemove.length} invalid tag references from physics system`);
+            tagsToRemove.forEach(tagId => {
+                this.tags.delete(tagId);
+            });
         }
-        
-        // Resolve remaining collisions after individual updates
-        this.resolvePostUpdateCollisions(normalizedDeltaTime);
-
-        // Final guarantee – run a deterministic separation pass so no boxes can remain intersecting
-        this.ensureNoOverlap();
     }
     
     /**
@@ -753,7 +853,7 @@ export class TagPhysics {
             // Get direction to center
             const toCenter = new THREE.Vector3(0, 0, 0).sub(tag.mesh.position).normalize();
             
-            // Set initial velocity regardless of any other conditions
+            // Set initial velocity at 0.5 times max speed, pointing to center
             physicsData.velocity = toCenter.clone().multiplyScalar(this.options.maxSpeed * 0.5);
             physicsData.easeProgress = 0.0;
             
@@ -767,13 +867,13 @@ export class TagPhysics {
             
             // Update easing progress (0.0 to 1.0)
             physicsData.easeProgress = Math.min(1.0, (physicsData.easeProgress || 0) + 
-                                             (this.options.easingFactor * normalizedDeltaTime * 5.0)); // Increased easing speed further
+                                              (this.options.easingFactor * normalizedDeltaTime * 5.0));
             
             // Apply non-linear easing curve for dramatic entry (slow start, faster end)
             const easeCurve = Math.pow(physicsData.easeProgress, this.options.easingCurveExponent);
-            physicsData.speedFactor = easeCurve * 0.8; // Increased to 80% max speed
+            physicsData.speedFactor = easeCurve * 0.8;
             
-            // Calculate movement vector - use much higher initial speed
+            // Calculate movement vector
             const easedSpeed = this.options.initialMoveSpeed * 5.0 * physicsData.speedFactor;
             const directMoveAmount = easedSpeed * normalizedDeltaTime;
             const moveVector = toCenter.multiplyScalar(directMoveAmount);
@@ -786,7 +886,7 @@ export class TagPhysics {
                 console.log(`Force moving tag ${tagId} directly by:`, moveVector, 'speed factor:', physicsData.speedFactor);
             }
             
-            // Set velocity for subsequent frames - much stronger here
+            // Set velocity for subsequent frames
             physicsData.velocity = toCenter.clone().multiplyScalar(this.options.maxSpeed * physicsData.speedFactor);
             
             // End direct movement after sufficient frames or allow physics to begin working
@@ -853,11 +953,11 @@ export class TagPhysics {
         
         // Calculate gravity reduction factor
         let gravityReductionFactor = 1.0;
-        if (totalTagCount > 0) {
-            const flippedRatio = flippedTagCount / totalTagCount;
-            // Scale from 1.0 to 0.2 - more flipped tags = less central gravity
-            gravityReductionFactor = Math.max(0.2, 1.0 - (flippedRatio * 0.8));
-        }
+        // if (totalTagCount > 0) {
+        //     const flippedRatio = flippedTagCount / totalTagCount;
+        //     // Scale from 1.0 to 0.2 - more flipped tags = less central gravity
+        //     gravityReductionFactor = Math.max(0.2, 1.0 - (flippedRatio * 0.8));
+        // }
         
         return gravityReductionFactor;
     }
@@ -867,7 +967,7 @@ export class TagPhysics {
      */
     applyCentralForce(tag, physicsData, currentElapsedTime) {
         const distance = tag.mesh.position.length();
-        const normalizedDist = Math.max(distance / (this.options.cubeSize || 1), 0.1); // Ensure non‑zero
+        const normalizedDist = Math.max(distance / (this.options.cubeSize || 1), 0.1); // Ensure non-zero
         const ageFactor = this.calculateAgeFactor(physicsData, currentElapsedTime);
         const sizeFactor = physicsData.size / 1.5;
         
@@ -875,11 +975,11 @@ export class TagPhysics {
         const gravityReductionFactor = this.calculateGravityReductionFactor();
         
         // Dynamic multiplier – stronger when further from centre or not yet rotated
-        const baseMultiplier = physicsData.flipCompleted ? 2.5 : 6.0;
+        const baseMultiplier = physicsData.flipCompleted ? 3.5 : 6.0;
         
-        // Apply gravity reduction to the central force
-        const centralForce = this.options.centralForce * baseMultiplier * normalizedDist * 
-                            (1 + ageFactor * 0.5) * (1 + sizeFactor) * gravityReductionFactor;
+        // Use inverse square law for central force - stronger pull when further out
+        const centralForce = this.options.centralForce * baseMultiplier * (normalizedDist * normalizedDist) * 
+                            (1 + sizeFactor) * gravityReductionFactor;
         
         const toCenter = this.safeNormalize(tag.mesh.position.clone().negate());
         physicsData.force.add(toCenter.multiplyScalar(centralForce));
@@ -949,89 +1049,135 @@ export class TagPhysics {
      * Apply jitter forces for better packing
      */
     applyJitterForces(physicsData, ageInSeconds) {
-        return;
-        // Reduce jitter magnitude for smoother visuals and disable for settled tags
-        if (ageInSeconds < 2.0 || physicsData.flipCompleted) return;
+        // Skip if tag is not flipped
+        if (!physicsData.flipCompleted) return;
         
-        const jiggleForce = 0.003; // Much smaller jitter
-        const jiggle = new THREE.Vector3(
-            (Math.random() - 0.5) * jiggleForce,
-            (Math.random() - 0.5) * jiggleForce,
-            (Math.random() - 0.5) * jiggleForce
+        // Only apply jitter forces to tags that are moving
+        // Stationary flipped tags are now handled by applyFloatingEffects
+        const isMovingFromCollision = physicsData.lastCollisionElapsedTime && 
+                                    (this.clock.getElapsedTime() - physicsData.lastCollisionElapsedTime < 1.0);
+        
+        // Only apply jitter if the tag is actively moving (being pushed around)
+        if (!isMovingFromCollision || physicsData.velocity.length() <= 0.2) return;
+        
+        // Apply small random jitter to assist with packing
+        const jitterStrength = 0.005 * Math.random();
+        const jitterVector = new THREE.Vector3(
+            (Math.random() - 0.5) * jitterStrength,
+            (Math.random() - 0.5) * jitterStrength,
+            (Math.random() - 0.5) * jitterStrength
         );
-        physicsData.force.add(jiggle);
+        
+        // Add jitter to velocity
+        physicsData.velocity.add(jitterVector);
     }
     
     /**
-     * Update velocity based on forces
+     * Find tag ID for physics data by looking through all tags
+     * @param {Object} targetPhysicsData - The physics data to find the tag ID for
+     * @returns {string|null} - The tag ID if found, null otherwise
+     */
+    findTagIdForPhysicsData(targetPhysicsData) {
+        for (const [tagId, physicsData] of this.tags.entries()) {
+            if (physicsData === targetPhysicsData) {
+                // Store the ID for future reference
+                physicsData.tagId = tagId;
+                return tagId;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Create a unique float offset for a tag based on its ID
+     * @returns {number} - A value between 0 and 2π for phase offset
+     */
+    createUniqueFloatOffset() {
+        // Generate a random float offset if we don't have a tag ID
+        return Math.random() * Math.PI * 2;
+    }
+    
+    /**
+     * Update velocity based on collision forces
+     * @param {Object} tag - Tag to apply forces to
+     * @param {Object} physicsData - Physics data for tag
+     * @param {number} normalizedDeltaTime - Normalized delta time
+     * @param {number} currentElapsedTime - Current elapsed time for age calculations
+     * @param {number} ageInSeconds - Age of tag in seconds
      */
     updateVelocity(tag, physicsData, normalizedDeltaTime, currentElapsedTime, ageInSeconds) {
-        // Apply forces to velocity
-        physicsData.velocity.add(physicsData.force.clone().divideScalar(physicsData.mass || 1.0).multiplyScalar(normalizedDeltaTime));
-        
-        // Log warning for low velocity during initial movement
-        if (physicsData.initialMovement && physicsData.velocity.length() < 0.1) {
-            console.log(`Tag ${tag.id} has low velocity during initial movement: ${physicsData.velocity.length()}, force: ${physicsData.force.length()}`);
+        // Apply very strong braking when collisions are detected
+        if (physicsData.isColliding) {
+            // Apply 80% velocity reduction upon collision for aggressive braking
+            physicsData.velocity.multiplyScalar(0.2);
+            
+            // Exit early to prevent adding more velocity during collision
+            return;
         }
         
-        // Apply damping with extreme heaviness after flip to minimize movement
-        let dampingFactor = Math.pow(physicsData.mass > 2.0 ? this.options.damping : this.options.damping * 1.5, normalizedDeltaTime);
-        if (physicsData.flipCompleted) {
-            // Apply extremely high damping to make tags super heavy after flipping
-            dampingFactor *= 10.0; // Significantly increase damping to slow down movement
-            // Initialize movementHeaviness if not already set (though not used for extreme damping)
-            if (!physicsData.movementHeaviness) {
-                physicsData.movementHeaviness = 1.0;
-            }
-            // Track last movement time for immovability
-            const velocityMagnitude = physicsData.velocity.length();
-            if (velocityMagnitude > 0.005) { // Very low threshold to detect any movement
-                physicsData.lastMovementTime = currentElapsedTime;
-                physicsData.immovableUntil = currentElapsedTime + 5.0; // Set immovability for 5 seconds after any movement
-            }
-        }
-        if ((physicsData.flipCompleted || physicsData.flipStartElapsedTime) && !physicsData.initialMovement) {
-            physicsData.velocity.multiplyScalar(dampingFactor);
+        // Calculate size-based damping - smaller tags need more damping to remain stable
+        const tagSize = physicsData.size || 1.0;
+        const sizeFactor = Math.max(0.5, Math.min(1.0, tagSize / 3)); // Clamp between 0.5 and 1.0
+        const inverseSizeFactor = 1 - (sizeFactor - 0.5) * 0.5; // Range from 1.0 (small) to 0.75 (large)
+        
+        // Handle special cases for new tags and post-rotation effects
+        // We want different behavior based on tag age
+        if (ageInSeconds < 1.5) {
+            // Early after tag creation - use high damping, lower max speed
+            const earlyDamping = 0.95 * inverseSizeFactor; // Higher damping for smaller tags
+            physicsData.velocity.multiplyScalar(earlyDamping);
+        } else if (ageInSeconds < 5) {
+            // Settling phase - more natural physics
+            const midDamping = 0.9 * inverseSizeFactor; // Higher damping for smaller tags
+            physicsData.velocity.multiplyScalar(midDamping);
+        } else {
+            // Settled tag - very high damping to keep stable
+            const lateDamping = 0.8 * inverseSizeFactor; // Higher damping for smaller tags
+            physicsData.velocity.multiplyScalar(lateDamping);
         }
         
-        // --- NEW: Hard braking of outward motion shortly after collisions ---
-        if (!physicsData.isColliding && physicsData.lastCollisionElapsedTime !== undefined) {
-            const timeSinceLastCollision = currentElapsedTime - physicsData.lastCollisionElapsedTime;
-            if (timeSinceLastCollision < 0.6) {
-                // Determine how fast we are moving away from the centre
-                const outwardDir = this.safeNormalize(tag.mesh.position.clone());
-                const outwardSpeed = physicsData.velocity.dot(outwardDir);
-                if (outwardSpeed > 0) {
-                    // Brake proportionally to how recently the collision occurred
-                    const brakeFactor = 1 - (timeSinceLastCollision / 0.6); // decays from 1 to 0
-                    physicsData.velocity.add(outwardDir.multiplyScalar(-outwardSpeed * brakeFactor));
-                }
-            }
-        }
-        // --- END NEW ---
-        
-        // Apply additional damping after inactivity
-        const lastInteractionTime = physicsData.lastInteractionElapsedTime || 0;
-        if (physicsData.flipCompleted && currentElapsedTime - lastInteractionTime > 5.0) {
-            physicsData.velocity.multiplyScalar(0.95);
+        // Apply a force-based acceleration
+        if (physicsData.force) {
+            // Calculate acceleration based on mass (F = ma, so a = F/m)
+            const mass = Math.max(physicsData.mass || 1.0, 0.1); // Ensure we don't divide by zero
+            
+            // Scale force by a factor to prevent excessive acceleration
+            const scaledForce = physicsData.force.clone().multiplyScalar(0.3 * sizeFactor);
+            
+            // Calculate acceleration vector (a = F/m)
+            const acceleration = scaledForce.divideScalar(mass);
+            
+            // Update velocity (v = v + a*dt)
+            physicsData.velocity.add(acceleration.multiplyScalar(normalizedDeltaTime));
         }
         
-        // Align velocity toward center during flight
-        if (!physicsData.flipStartElapsedTime && !physicsData.flipCompleted && ageInSeconds > 1.0) {
-            this.alignVelocityToCenter(tag, physicsData, normalizedDeltaTime);
+        // Cap velocity to max speed to prevent excessive movement
+        // Need different caps for different tag ages
+        let maxSpeed = this.options.maxSpeed * sizeFactor;
+        
+        // Scale max speed by tag age
+        if (ageInSeconds < 1.5) {
+            maxSpeed *= 0.5; // Lower max speed for new tags
+        } else if (ageInSeconds < 5) {
+            maxSpeed *= 0.7; // Mid max speed for settling tags
+        } else if (physicsData.collisionPushback && physicsData.collisionPushback.lengthSq() > 0) {
+            // If we have a collision pushback, temporarily allow higher speed
+            maxSpeed *= 1.5;
         }
         
-        // Apply immovability check with longer duration
-        this.applyImmovabilityCheck(tag, physicsData, normalizedDeltaTime, currentElapsedTime);
-        
-        // Limit maximum speed, especially after flip to ensure minimal movement
-        if (physicsData.flipCompleted && physicsData.velocity.length() > 0.1) { // Very low speed cap after flip
-            const normalizedVelocity = this.safeNormalize(physicsData.velocity);
-            physicsData.velocity.copy(normalizedVelocity.multiplyScalar(0.1));
-        } else if (physicsData.velocity.length() > this.options.maxSpeed) {
-            const normalizedVelocity = this.safeNormalize(physicsData.velocity);
-            physicsData.velocity.copy(normalizedVelocity.multiplyScalar(this.options.maxSpeed));
+        // Constrain velocity to max speed
+        const currentSpeed = physicsData.velocity.length();
+        if (currentSpeed > maxSpeed) {
+            physicsData.velocity.multiplyScalar(maxSpeed / currentSpeed);
         }
+        
+        // Apply strong braking when speed is very low to prevent perpetual motion
+        if (currentSpeed < 0.05) {
+            physicsData.velocity.multiplyScalar(0.7); // 70% velocity reduction
+        }
+        
+        // Apply velocity constraints to prevent extreme values
+        this.constrainVelocity(tag, physicsData.velocity);
     }
     
     /**
@@ -1103,14 +1249,32 @@ export class TagPhysics {
         }
         
         // Progress flip animation
-        const flipElapsedTime = (currentElapsedTime - physicsData.flipStartElapsedTime) * 1000;
+        const flipElapsedTime = (currentElapsedTime - physicsData.flipStartElapsedTime) * 2500;
         if (flipElapsedTime < this.options.flipAnimationDuration) {
+            // Ensure we have proper quaternions for rotation
+            if (!physicsData.startQuaternion || !tag.originalRotation) {
+                // If missing, recreate them
+                physicsData.startQuaternion = tag.mesh.quaternion.clone();
+                
+                // If originalRotation is missing, recreate it from the target face
+                if (!tag.originalRotation) {
+                    const face = tag.physicsFace || physicsData.face;
+                    console.log(`Recreating missing rotation for tag ${tag.id}, face: ${face}`);
+                    const faceRotation = this.getFaceRotation(face);
+                    tag.originalRotation = faceRotation;
+                }
+            }
+            
             // Update rotation
             const progress = flipElapsedTime / this.options.flipAnimationDuration;
+            
+            // Get the target quaternion from the face rotation
             const targetQuaternion = new THREE.Quaternion().setFromEuler(tag.originalRotation);
+            
+            // Use slerp for smooth rotation
             tag.mesh.quaternion.slerpQuaternions(physicsData.startQuaternion, targetQuaternion, progress);
             
-            // Continue moving towards center during flip
+            // Continue moving towards center during flip with normal speed
             const positionDelta = physicsData.velocity.clone().multiplyScalar(normalizedDeltaTime);
             tag.mesh.position.add(positionDelta);
             
@@ -1126,17 +1290,33 @@ export class TagPhysics {
             }
         } else {
             // Rotation complete
-            tag.mesh.rotation.copy(tag.originalRotation);
+            if (tag.originalRotation) {
+                tag.mesh.rotation.copy(tag.originalRotation);
+            } else {
+                // If originalRotation is missing, recreate from the face
+                const face = tag.physicsFace || physicsData.face;
+                const faceRotation = this.getFaceRotation(face);
+                tag.mesh.rotation.copy(faceRotation);
+                console.log(`Applied face rotation directly to tag ${tag.id}`);
+            }
+            
+            // Clean up rotation state
             delete tag.originalRotation;
             delete physicsData.startQuaternion;
             
-            // Apply inward impulse
+            // Apply inward impulse with appropriate strength
             const inwardDirection = this.safeNormalize(tag.mesh.position.clone().negate());
-            physicsData.velocity.add(inwardDirection.multiplyScalar(0.15));
+            physicsData.velocity.add(inwardDirection.multiplyScalar(0.1));
+            
+            // Apply moderate braking to allow some continued movement towards center
+            physicsData.velocity.multiplyScalar(0.5);
             
             // Mark as completed
             physicsData.flipCompleted = true;
             delete physicsData.flipStartElapsedTime;
+            
+            // Log completion
+            console.log(`Tag ${tag.id} rotation completed`);
         }
     }
     
@@ -1158,6 +1338,15 @@ export class TagPhysics {
         // Check if tag has settled and should start flipping
         const isSettled = this.checkIfTagHasSettled(tag, physicsData, ageInSeconds, currentElapsedTime);
         
+        // Debug output to help diagnose flipping issues
+        if (physicsData.frameCount % 120 === 0 && this.DEBUG_MODE) {
+            console.log(`Tag ${tag.id} flip check:`, {
+                isSettled,
+                hasOriginalRotation: !!tag.originalRotation,
+                flipping: !!physicsData.flipStartElapsedTime
+            });
+        }
+        
         if (isSettled && tag.originalRotation && !physicsData.flipStartElapsedTime) {
             // Check if there's enough space to flip
             if (this.options.preventFlipOverlap) {
@@ -1175,9 +1364,13 @@ export class TagPhysics {
             physicsData.startQuaternion = tag.mesh.quaternion.clone();
             physicsData.isFullySettled = false;
             
-            if (this.DEBUG_MODE) {
-                console.log(`Tag ${tag.id} starting flip animation at ${currentElapsedTime}`);
+            // Ensure face for rotation is available
+            if (!tag.physicsFace) {
+                tag.physicsFace = physicsData.face;
             }
+            
+            // Output helpful diagnostic info
+            console.log(`Tag ${tag.id} starting flip animation at ${currentElapsedTime}, face: ${tag.physicsFace}`);
         }
     }
     
@@ -1246,9 +1439,8 @@ export class TagPhysics {
         // This helps catch and fix any tags that somehow ended up interlocked
         const currentTime = this.clock.getElapsedTime();
         if (activeTags.length === 0) {
-            // Run a full collision check 10 times per second (every 0.1 seconds)
-            // Much more frequent than before to prevent any visible overlap
-            if (!this.lastFullCollisionCheck || (currentTime - this.lastFullCollisionCheck) > 0.02) {
+            // Run a full collision check every 0.1 seconds
+            if (!this.lastFullCollisionCheck || (currentTime - this.lastFullCollisionCheck) > 0.1) {
                 this.lastFullCollisionCheck = currentTime;
                 
                 // Check all tags
@@ -1268,7 +1460,7 @@ export class TagPhysics {
         }
         
         // Multiple iterations for better convergence
-        for (let iteration = 0; iteration < 5; iteration++) {
+        for (let iteration = 0; iteration < 3; iteration++) {
             let maxOverlap = 0;
             let totalRepositionings = 0;
             
@@ -1318,8 +1510,7 @@ export class TagPhysics {
                         ).normalize();
                         
                         // Calculate gentle pushback to separate tags
-                        // Further reduce multiplier (0.3) for minimal displacement
-                        const pushStrength = maxDim * 0.003;
+                        const pushStrength = maxDim * 0.01;
                         const pushVector = scaledDir.multiplyScalar(pushStrength);
                         
                         // Accumulate pushback
@@ -1327,15 +1518,14 @@ export class TagPhysics {
                         
                         // Also push the other tag in the opposite direction
                         // Using same smooth factor for both tags
-                        const otherPushVector = scaledDir.clone().negate().multiplyScalar(pushStrength * 0.8);
+                        const otherPushVector = scaledDir.clone().negate().multiplyScalar(pushStrength);
                         otherTag.mesh.position.add(otherPushVector);
                         
                         // Reset immovability
                         otherPhysics.immovableUntil = 0;
                         
                         // Apply a gentle velocity impulse for smooth continued separation
-                        // Reduced from 0.5 to 0.15 for much smoother movement
-                        otherPhysics.velocity.add(otherPushVector.clone().multiplyScalar(0.15));
+                        otherPhysics.velocity.add(otherPushVector.clone().multiplyScalar(0.2));
                         
                         // Update other tag's bounding box
                         this.updateTagBoundingBox(otherTag);
@@ -1361,7 +1551,7 @@ export class TagPhysics {
                     }
 
                     // Apply gentle velocity impulse to assist separation
-                    physicsData.velocity.add(pushback.clone().multiplyScalar(0.15));
+                    physicsData.velocity.add(pushback.clone().multiplyScalar(0.2));
 
                     totalRepositionings++;
                 }
@@ -1461,7 +1651,8 @@ export class TagPhysics {
         // Reduce collision force if tag has completed rotation and settled for stability
         const isSettled = physicsData.flipCompleted && 
                          (currentElapsedTime - (physicsData.postRotationStartTime || 0) > 3.0);
-        const collisionForceMultiplier = isSettled ? 0.5 : 1.0;
+        // Use appropriate collision force multiplier
+        const collisionForceMultiplier = isSettled ? 0.2 : 0.4;
         
         for (const [otherId, otherPhysics] of this.tags) {
             if (tag.id === otherId) continue;
@@ -1515,7 +1706,7 @@ export class TagPhysics {
                     const maxOverlap = Math.max(overlapSize.x, overlapSize.y, overlapSize.z);
                     
                     // Force is proportional to overlap
-                    forceMagnitude = this.options.collisionForce * maxOverlap * 1.5 * collisionForceMultiplier;
+                    forceMagnitude = this.options.collisionForce * maxOverlap * 0.5 * collisionForceMultiplier;
                     
                     // If both tags are settled, apply smooth position adjustment
                     const otherIsSettled = otherPhysics.flipCompleted && 
@@ -1528,7 +1719,7 @@ export class TagPhysics {
                     
                     if (isSettled && otherIsSettled) {
                         // Calculate position adjustment to gradually remove overlap
-                        const adjustmentAmount = maxOverlap * 0.3; // 30% adjustment per frame
+                        const adjustmentAmount = maxOverlap * 0.5; // 50% adjustment per frame (increased from 30%)
                         
                         // Determine adjustment distribution based on whether other tag is already moving
                         let tagAdjustmentFactor = 0.5;  // Default: Split adjustment equally
@@ -1536,8 +1727,8 @@ export class TagPhysics {
                         
                         if (otherIsMovingFromCollision) {
                             // If the other tag is already moving from collision, move this tag more
-                            tagAdjustmentFactor = 0.85;
-                            otherAdjustmentFactor = 0.15;
+                            tagAdjustmentFactor = 0.9;  // Increased from 0.8
+                            otherAdjustmentFactor = 0.1; // Reduced from 0.2
                         }
                         
                         // Create adjustment vectors for both tags
@@ -1552,7 +1743,7 @@ export class TagPhysics {
                         if (!otherIsMovingFromCollision) {
                             otherPhysics.targetAdjustment = otherPhysics.targetAdjustment || new THREE.Vector3(0, 0, 0);
                             otherPhysics.targetAdjustment.add(otherAdjustment);
-                            otherPhysics.smoothMoveDuration = 0.6;
+                            otherPhysics.smoothMoveDuration = 0.4; // Faster adjustment (reduced from 0.6)
                             otherPhysics.smoothMoveStartTime = currentElapsedTime;
                         } else {
                             // Apply additional adjustment to current tag to compensate
@@ -1560,13 +1751,13 @@ export class TagPhysics {
                         }
                         
                         // Set animation duration
-                        physicsData.smoothMoveDuration = 0.6; // 0.6 seconds for animation
+                        physicsData.smoothMoveDuration = 0.4; // Faster adjustment (reduced from 0.6)
                         physicsData.smoothMoveStartTime = currentElapsedTime;
                         
-                        // Reduce velocity to prevent oscillation
-                        physicsData.velocity.multiplyScalar(0.8);
+                        // Apply very strong braking to prevent oscillation
+                        physicsData.velocity.multiplyScalar(0.2); // Increased braking from 0.3 to 0.2
                         if (!otherIsMovingFromCollision) {
-                            otherPhysics.velocity.multiplyScalar(0.8);
+                            otherPhysics.velocity.multiplyScalar(0.2); // Increased braking from 0.3 to 0.2
                         }
                     }
                 } else {
@@ -1575,8 +1766,8 @@ export class TagPhysics {
                     direction = this.safeNormalize(distanceVector);
                     
                     // Smaller tags push harder relative to their mass to make space
-                    const sizeRatio = physicsData.size < otherPhysics.size ? 1.8 : 1.0; // Smaller tags push even more
-                    forceMagnitude = this.options.collisionForce * overlap * sizeRatio * 1.0 * collisionForceMultiplier;
+                    const sizeRatio = physicsData.size < otherPhysics.size ? 1.5 : 0.8;
+                    forceMagnitude = this.options.collisionForce * overlap * sizeRatio * 0.5 * collisionForceMultiplier;
                 }
                 
                 // Check if tag is already moving away from collision
@@ -1598,7 +1789,7 @@ export class TagPhysics {
                     
                     if (otherIsMovingFromCollision) {
                         // Apply more force to current tag if other tag is already moving
-                        currentTagForceFactor = Math.min(currentTagForceFactor * 1.8, 0.95);
+                        currentTagForceFactor = Math.min(currentTagForceFactor * 1.5, 0.9);
                         otherTagForceFactor = 1.0 - currentTagForceFactor;
                     }
                     
@@ -1613,6 +1804,12 @@ export class TagPhysics {
                         const otherScaledForceMagnitude = forceMagnitude * otherTagForceFactor;
                         otherPhysics.force = otherPhysics.force || new THREE.Vector3(0, 0, 0);
                         otherPhysics.force.add(direction.clone().negate().multiplyScalar(otherScaledForceMagnitude));
+                    }
+                    
+                    // Apply very strong braking to both tags when collision occurs 
+                    physicsData.velocity.multiplyScalar(0.2); // Increased braking from 0.3 to 0.2
+                    if (!otherPhysics.forceDirectMove) {
+                        otherPhysics.velocity.multiplyScalar(0.2); // Increased braking from 0.3 to 0.2
                     }
                 }
 
@@ -1668,16 +1865,15 @@ export class TagPhysics {
             tag.collisionBox = new THREE.Box3();
         }
         
-        // Make collision box significantly larger (35% in each dimension)
-        // Increased from 25% to 35% to prevent overlaps more aggressively
-        const padding = 1.35;
+        // Make collision box larger (25% in each dimension)
+        const padding = 0.05;
         
         // Get center of bounding box
         const center = new THREE.Vector3();
         tag.boundingBox.getCenter(center);
         
         // Calculate new min/max with padding around center
-        const halfSize = size.clone().multiplyScalar(0.5 * padding);
+        const halfSize = size.clone().multiplyScalar(0.5);
         const min = center.clone().sub(halfSize);
         const max = center.clone().add(halfSize);
         
@@ -1856,8 +2052,8 @@ export class TagPhysics {
                 absDir.y * ySeparation +
                 absDir.z * zSeparation;
                 
-            // Increased buffer zone for more strict separation
-            const bufferFactor = 1.25; // 25% buffer
+            // Buffer zone for separation
+            const bufferFactor = 1.2; // 20% buffer
             const combinedSize = weightedSep;
             const tooClose = centerDistance < combinedSize * bufferFactor;
             
@@ -1874,18 +2070,17 @@ export class TagPhysics {
                     
                     // Scale by largest overlap dimension for stronger response
                     const maxOverlap = Math.max(overlapSize.x, overlapSize.y, overlapSize.z);
-                    overlapFactor = 6.0 * maxOverlap / combinedSize;
+                    overlapFactor = 4.0 * maxOverlap / combinedSize;
                 } else {
                     // For proximity warning, scale by how close we are to allowed minimum
-                    overlapFactor = 2.0 * (1.0 - (centerDistance / (combinedSize * bufferFactor)));
+                    overlapFactor = 1.5 * (1.0 - (centerDistance / (combinedSize * bufferFactor)));
                 }
                 
                 // Vector pointing away from other tag
                 const awayVector = centerDirection;
                 
-                // Much stronger pushback force during rotation to prevent overlapping
-                // Significantly increased pushback multiplier
-                const pushDistance = 0.5 * normalizedDeltaTime * overlapFactor * this.options.collisionPushScale * 4.0;
+                // Pushback force during rotation to prevent overlapping
+                const pushDistance = 0.5 * normalizedDeltaTime * overlapFactor * this.options.collisionPushScale * 2.0;
                 
                 const pushVector = awayVector.multiplyScalar(pushDistance);
                 
@@ -1893,21 +2088,18 @@ export class TagPhysics {
                 physicsData.collisionPushback.add(pushVector);
                 
                 // Also add a velocity component in that direction for continuous separation
-                // Increased velocity component for better separation
-                physicsData.velocity.add(awayVector.multiplyScalar(overlapFactor));
+                physicsData.velocity.add(awayVector.multiplyScalar(overlapFactor * 0.5));
                 
                 // If true intersection (boxes overlap), also push the other tag away
                 if ((boxesIntersect || centerDistance < combinedSize) && !otherPhysics.flipStartElapsedTime) {
                     // Calculate push vector for other tag (in opposite direction)
-                    // Apply more force to other tag for better resolution
-                    const otherPushVector = awayVector.clone().negate().multiplyScalar(pushDistance * 1.2);
+                    const otherPushVector = awayVector.clone().negate().multiplyScalar(pushDistance);
                     
                     // Apply direct position change to other tag to quickly resolve collision
                     otherTag.mesh.position.add(otherPushVector);
                     
                     // Also add velocity to other tag to maintain separation
-                    // Increased velocity component for better separation
-                    otherPhysics.velocity.add(awayVector.clone().negate().multiplyScalar(overlapFactor * 0.8));
+                    otherPhysics.velocity.add(awayVector.clone().negate().multiplyScalar(overlapFactor * 0.5));
                     
                     // Reset the other tag's immovability to allow it to move away
                     otherPhysics.lastInteractionElapsedTime = this.clock.getElapsedTime();
@@ -1928,81 +2120,44 @@ export class TagPhysics {
      * Apply cube-directed gravity to pull tags toward the nearest cube face after rotation
      */
     applyCubeGravity(tag, physicsData) {
-        // Safety check
-        if (!tag || !tag.mesh) return;
+        if (!physicsData.face) return;
         
-        // Get tag position
-        const position = tag.mesh.position.clone();
+        // Skip if not settled enough
+        if (!physicsData.flipCompleted) return;
         
-        // Don't apply gravity if position contains NaN
-        if (isNaN(position.x) || isNaN(position.y) || isNaN(position.z)) {
-            return;
-        }
+        // Get normal vector for the face
+        const faceNormal = this.getFaceNormal(physicsData.face);
         
-        // Calculate distance to center
-        const distanceToCenter = position.length();
-        if (distanceToCenter < 0.001) return;  // Don't apply gravity at center
+        // Calculate the current distance from face
+        const projection = tag.mesh.position.dot(faceNormal);
+        const distanceToFace = Math.abs(projection - this.options.cubeSize * 0.5);
         
-        // Get gravity reduction factor based on proportion of flipped tags
-        const gravityReductionFactor = this.calculateGravityReductionFactor();
+        // Calculate force strength based on distance (stronger when farther)
+        const gravityStrength = this.options.cubeGravityStrength * 
+                               Math.min(1.0, distanceToFace / this.options.cubeSize);
         
-        // Calculate the target cube size (how far out the cube faces should be)
-        const targetCubeSize = this.options.cubeSize * 0.8; // Cube slightly smaller than overall diameter
+        // Calculate vector from tag to its target position on cube face
+        const targetOffset = faceNormal.clone().multiplyScalar(this.options.cubeSize * 0.5);
+        const targetPosition = targetOffset.clone();
         
-        // Find the axis with the largest absolute value (closest to a cube face)
-        const absX = Math.abs(position.x);
-        const absY = Math.abs(position.y);
-        const absZ = Math.abs(position.z);
+        // Calculate vector pointing from current position to target position
+        const toTarget = targetPosition.sub(tag.mesh.position.clone());
         
-        // Create gravity direction vector
-        const gravityDir = new THREE.Vector3(0, 0, 0);
+        // Normalize and scale by gravity strength
+        const direction = this.safeNormalize(toTarget);
         
-        // Determine which cube face is closest and apply gravity towards that face
-        if (absX >= absY && absX >= absZ) {
-            // X-axis (left or right face)
-            gravityDir.x = position.x > 0 ? 1 : -1;
-        } else if (absY >= absX && absY >= absZ) {
-            // Y-axis (top or bottom face)
-            gravityDir.y = position.y > 0 ? 1 : -1;
-        } else {
-            // Z-axis (front or back face)
-            gravityDir.z = position.z > 0 ? 1 : -1;
-        }
+        // Apply force toward face target position
+        physicsData.force.add(direction.multiplyScalar(gravityStrength));
         
-        // Calculate how far from the cube face the tag is
-        const currentDist = (gravityDir.x !== 0) ? absX : 
-                          (gravityDir.y !== 0) ? absY : absZ;
-        
-        // Calculate desired distance
-        const targetDist = targetCubeSize;
-        
-        // Apply gravity force based on distance from the cube face with reduced strength
-        if (currentDist < targetDist) {
-            // If inside the cube, push outward toward face
-            const forceFactor = Math.max(0, (targetDist - currentDist) / targetDist);
-            const force = gravityDir.clone().multiplyScalar(
-                this.options.cubeGravityStrength * 0.1 * forceFactor * gravityReductionFactor
-            );
-            physicsData.force.add(force);
-        } else if (currentDist > targetDist) {
-            // If outside the cube, pull inward toward face
-            const forceFactor = Math.max(0, (currentDist - targetDist) / Math.max(currentDist, 0.001));
-            const force = gravityDir.clone().multiplyScalar(
-                -this.options.cubeGravityStrength * 0.1 * forceFactor * gravityReductionFactor
-            );
-            physicsData.force.add(force);
-        }
-        
-        // Add extra force to center tags on their faces (horizontal/vertical centering)
-        const faceNormal = gravityDir.clone();
-        const tangentPos = position.clone().sub(faceNormal.clone().multiplyScalar(currentDist));
-        
-        // Calculate centering force (pulls toward center of face)
-        if (tangentPos.lengthSq() > 0.01) {
-            const centeringForce = tangentPos.clone().multiplyScalar(
-                -0.05 * this.options.cubeGravityStrength * 0.1 * gravityReductionFactor
-            );
-            physicsData.force.add(centeringForce);
+        // Add braking effect to dampen oscillations, but not too strong
+        if (physicsData.velocity.length() > 0.01) {
+            // Calculate component of velocity along the target direction
+            const velDotDir = physicsData.velocity.dot(direction);
+            
+            // Apply braking for any component of velocity NOT along target direction
+            if (Math.abs(velDotDir) < physicsData.velocity.length() * 0.8) {
+                physicsData.velocity.multiplyScalar(0.95); // 5% velocity reduction
+            }
         }
     }
 
@@ -2010,26 +2165,46 @@ export class TagPhysics {
      * Check if tag has settled enough to start face rotation
      */
     checkIfTagHasSettled(tag, physicsData, ageInSeconds, currentElapsedTime) {
+        // Ensure tag has been in the system long enough before settling
+        // Min time before allowing settling - reduced to allow quicker flipping
+        const minimumAllowedSettleTime = 0.5; // 0.5 second minimum
+        if (ageInSeconds < minimumAllowedSettleTime) {
+            return false;
+        }
+        
         // Check position in cluster first - primary condition based on distance
         const distanceToCenter = tag.mesh.position.length();
-        const maxClusterRadius = this.options.cubeSize * 1.0; // Radius within which to start flip
+        // Use a much smaller cluster radius to force flipping closer to center
+        const maxClusterRadius = this.options.cubeSize * 0.3; // Much smaller radius for closer flipping
         const isInClusterRange = distanceToCenter < maxClusterRadius;
         
-        // Minimum flight time requirement as backup - significantly reduced to start flip very early if needed
-        const minimumFlightTime = 0.5; // Backup time condition if distance not met yet
+        // Minimum flight time requirement as backup
+        const minimumFlightTime = 0.8; // Quicker settlement
         const hasFlownEnough = ageInSeconds > minimumFlightTime;
         
-        // Check basic settlement conditions - very lenient velocity check for early flip
-        const lowVelocity = physicsData.velocity.length() < 0.5; // Much higher threshold to allow flip while moving fast
-        
-        // Check for neighboring tags - not required for early flip
-        const hasNeighbors = this.checkForNeighbors(tag, 5.0); // Still check but less impactful
+        // Check basic settlement conditions - relaxed velocity check for quicker flipping
+        const lowVelocity = physicsData.velocity.length() < 0.35;
         
         // Check if tag is stuck trying to move inward
-        const isStuck = this.checkIfTagIsStuck(tag, physicsData, currentElapsedTime, hasNeighbors);
+        const isStuck = this.checkIfTagIsStuck(tag, physicsData, currentElapsedTime, false);
         
-        // Tag is settled if within distance range or meets backup time condition
-        return isInClusterRange || (hasFlownEnough && (lowVelocity || isStuck || ageInSeconds > 1.0));
+        // Tag is settled if within distance range and has low velocity
+        const inRangeAndSettled = isInClusterRange && lowVelocity;
+        
+        // Alternative settlement conditions for backup
+        const backupSettlement = hasFlownEnough && (lowVelocity || isStuck || ageInSeconds > 1.5);
+        
+        // Log settlement conditions for debugging
+        if (physicsData.frameCount % 60 === 0 && this.DEBUG_MODE) {
+            console.log(`Tag ${tag.id} settlement check: distance=${distanceToCenter.toFixed(2)}, 
+                  velocity=${physicsData.velocity.length().toFixed(2)}, 
+                  age=${ageInSeconds.toFixed(1)}, 
+                  isStuck=${isStuck}, 
+                  result=${inRangeAndSettled || backupSettlement}`);
+        }
+        
+        // Prioritize distance to center for flip decision
+        return isInClusterRange || (ageInSeconds > 1.2 && hasFlownEnough);
     }
     
     /**
@@ -2277,106 +2452,269 @@ export class TagPhysics {
     }
 
     /**
-     * Ensure no tags are overlapping in the final positions
+     * Place tags in grid cells for spatial partitioning
+     * @param {Map} grid - Grid map to populate
+     * @param {number} cellSize - Size of each grid cell
+     * @param {Array} tagIds - Array of tag IDs to process
+     */
+    populateGridCells(grid, cellSize, tagIds) {
+        for (const tagId of tagIds) {
+            const tag = this.getTagById(tagId);
+            if (!tag || !tag.mesh) continue;
+            
+            // Get tag's position
+            const pos = tag.mesh.position;
+            
+            // Calculate grid cell indices
+            const x = Math.floor(pos.x / cellSize);
+            const y = Math.floor(pos.y / cellSize);
+            const z = Math.floor(pos.z / cellSize);
+            
+            // Create cell key (string for fast map lookup)
+            const cellKey = `${x},${y},${z}`;
+            
+            // Add tag to cell
+            if (!grid.has(cellKey)) {
+                grid.set(cellKey, []);
+            }
+            grid.get(cellKey).push(tagId);
+            
+            // Also add to neighboring cells if near boundary
+            // This ensures we catch collisions at cell boundaries
+            const xFrac = (pos.x / cellSize) - x;
+            const yFrac = (pos.y / cellSize) - y;
+            const zFrac = (pos.z / cellSize) - z;
+            
+            // Check if we're near a boundary (within 20% of cell size)
+            const checkNeighbors = (frac, dim) => {
+                if (frac < 0.2) return -1; // Check negative neighbor
+                if (frac > 0.8) return 1;  // Check positive neighbor
+                return 0; // No need to check
+            };
+            
+            const xNeighbor = checkNeighbors(xFrac, 'x');
+            const yNeighbor = checkNeighbors(yFrac, 'y');
+            const zNeighbor = checkNeighbors(zFrac, 'z');
+            
+            // Add to relevant neighbor cells
+            if (xNeighbor !== 0) {
+                const neighborKey = `${x + xNeighbor},${y},${z}`;
+                if (!grid.has(neighborKey)) {
+                    grid.set(neighborKey, []);
+                }
+                grid.get(neighborKey).push(tagId);
+            }
+            
+            if (yNeighbor !== 0) {
+                const neighborKey = `${x},${y + yNeighbor},${z}`;
+                if (!grid.has(neighborKey)) {
+                    grid.set(neighborKey, []);
+                }
+                grid.get(neighborKey).push(tagId);
+            }
+            
+            if (zNeighbor !== 0) {
+                const neighborKey = `${x},${y},${z + zNeighbor}`;
+                if (!grid.has(neighborKey)) {
+                    grid.set(neighborKey, []);
+                }
+                grid.get(neighborKey).push(tagId);
+            }
+        }
+    }
+    
+    /**
+     * Ensure no tags are overlapping by directly separating them
+     * This is a final guarantee pass that runs after all physics updates
+     * @param {number} maxIterations - Maximum iterations to try separating 
      */
     ensureNoOverlap(maxIterations = 4) {
         if (this.tags.size < 2) return;
         
-        const tagIds = Array.from(this.tags.keys());
+        // Use a spatial grid to reduce O(n²) collision checks
+        const perfStart = performance.now();
+        const perfMetrics = {
+            total: 0,
+            gridCreation: 0,
+            collisionChecks: 0, 
+            pairsChecked: 0
+        };
+
+        // Current elapsed time for collision tracking
         const currentElapsedTime = this.clock.getElapsedTime();
+        
+        // Get all tag IDs
+        const tagIds = Array.from(this.tags.keys());
+        if (tagIds.length < 2) return;
+        
+        // Create spatial grid - simple spatial hash partitioning
+        const gridStart = performance.now();
+        const cellSize = 5; // Cell size based on average tag size + buffer
+        const grid = new Map(); // Maps cell key to array of tag IDs
+        
+        // Place tags in grid cells
+        this.populateGridCells(grid, cellSize, tagIds);
+        
+        perfMetrics.gridCreation = performance.now() - gridStart;
+        
+        // Run collision resolution iterations
+        const collisionStart = performance.now();
+        let totalPairsChecked = 0;
         
         for (let iter = 0; iter < maxIterations; iter++) {
             let anyMoved = false;
             
-            for (let i = 0; i < tagIds.length; i++) {
-                const tagA = this.getTagById(tagIds[i]);
-                if (!tagA || !tagA.mesh) continue;
+            // For each cell in the grid
+            for (const [cellKey, cellTags] of grid.entries()) {
+                // Skip cells with 0 or 1 tag
+                if (cellTags.length < 2) continue;
                 
-                const physA = this.tags.get(tagIds[i]);
-                if (!physA) continue;
-                
-                this.updateTagBoundingBox(tagA);
-
-                for (let j = i + 1; j < tagIds.length; j++) {
-                    const tagB = this.getTagById(tagIds[j]);
-                    if (!tagB || !tagB.mesh) continue;
+                // Check for collisions between all tags in this cell
+                for (let i = 0; i < cellTags.length; i++) {
+                    const tagAId = cellTags[i];
+                    const tagA = this.getTagById(tagAId);
+                    if (!tagA || !tagA.mesh) continue;
                     
-                    const physB = this.tags.get(tagIds[j]);
-                    if (!physB) continue;
+                    const physA = this.tags.get(tagAId);
+                    if (!physA) continue;
                     
-                    this.updateTagBoundingBox(tagB);
-
-                    if (!tagA.collisionBox.intersectsBox(tagB.collisionBox)) continue;
-
-                    // Determine push direction and magnitude
-                    const centerA = new THREE.Vector3();
-                    const centerB = new THREE.Vector3();
-                    tagA.collisionBox.getCenter(centerA);
-                    tagB.collisionBox.getCenter(centerB);
-
-                    let dir = centerA.clone().sub(centerB);
-                    if (dir.lengthSq() < 1e-6) {
-                        // Centres coincide – pick arbitrary axis
-                        dir = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+                    // Skip recently moved tags for stability
+                    if (physA.lastCollisionElapsedTime && 
+                        (currentElapsedTime - physA.lastCollisionElapsedTime) < 0.05) {
+                        continue;
                     }
-                    dir = this.safeNormalize(dir);
-
-                    const overlapBox = new THREE.Box3().copy(tagA.collisionBox).intersect(tagB.collisionBox);
-                    const overlapSize = new THREE.Vector3();
-                    overlapBox.getSize(overlapSize);
-                    const maxDim = Math.max(overlapSize.x, overlapSize.y, overlapSize.z);
-
-                    // Push distance beyond overlap with increased spacing
-                    const pushDist = maxDim * 0.6 + this.options.spacing;
-
-                    // Safe mass calculation
-                    const totalMass = Math.max(physA.mass + physB.mass, 0.001);
-                    const moveFactorA = pushDist * (physB.mass / totalMass);
-                    const moveFactorB = pushDist * (physA.mass / totalMass);
                     
-                    const isSettledA = physA.flipCompleted && physA.lastCollisionElapsedTime < currentElapsedTime - 3.0;
-                    const isSettledB = physB.flipCompleted && physB.lastCollisionElapsedTime < currentElapsedTime - 3.0;
-                    
-                    // Determine if we should use smooth animation
-                    if (isSettledA && isSettledB) {
-                        // Set up smooth animation for both tags
-                        const moveVectorA = dir.clone().multiplyScalar(moveFactorA);
-                        const moveVectorB = dir.clone().negate().multiplyScalar(moveFactorB);
-                        
-                        // Initialize target adjustment if needed
-                        physA.targetAdjustment = physA.targetAdjustment || new THREE.Vector3(0, 0, 0);
-                        physB.targetAdjustment = physB.targetAdjustment || new THREE.Vector3(0, 0, 0);
-                        
-                        // Add movement vectors to existing adjustments
-                        physA.targetAdjustment.add(moveVectorA);
-                        physB.targetAdjustment.add(moveVectorB);
-                        
-                        // Set smooth move parameters
-                        physA.smoothMoveDuration = 0.5;
-                        physA.smoothMoveStartTime = currentElapsedTime;
-                        physB.smoothMoveDuration = 0.5;
-                        physB.smoothMoveStartTime = currentElapsedTime;
-                    } else {
-                        // Apply direct movement
-                        const moveA = dir.clone().multiplyScalar(moveFactorA);
-                        const moveB = dir.clone().negate().multiplyScalar(moveFactorB);
-    
-                        tagA.mesh.position.add(moveA);
-                        tagB.mesh.position.add(moveB);
-    
-                        // Nudge velocities too so tags keep separating naturally
-                        physA.velocity = physA.velocity || new THREE.Vector3(0, 0, 0);
-                        physB.velocity = physB.velocity || new THREE.Vector3(0, 0, 0);
-                        physA.velocity.add(moveA.clone().multiplyScalar(0.3));
-                        physB.velocity.add(moveB.clone().multiplyScalar(0.3));
+                    // Make sure tag has a bounding box
+                    if (!tagA.boundingBox || !tagA.collisionBox) {
+                        this.updateTagBoundingBox(tagA);
                     }
-
-                    // Flag that we moved something
-                    anyMoved = true;
                     
-                    // Update collision times
-                    physA.lastCollisionElapsedTime = currentElapsedTime;
-                    physB.lastCollisionElapsedTime = currentElapsedTime;
+                    for (let j = i + 1; j < cellTags.length; j++) {
+                        const tagBId = cellTags[j];
+                        
+                        // Skip if actually the same tag (can happen due to being in multiple cells)
+                        if (tagAId === tagBId) continue;
+                        
+                        totalPairsChecked++;
+                        
+                        const tagB = this.getTagById(tagBId);
+                        if (!tagB || !tagB.mesh) continue;
+                        
+                        const physB = this.tags.get(tagBId);
+                        if (!physB) continue;
+                        
+                        // Skip recently moved tags for stability
+                        if (physB.lastCollisionElapsedTime && 
+                            (currentElapsedTime - physB.lastCollisionElapsedTime) < 0.05) {
+                            continue;
+                        }
+                        
+                        // Make sure tag has a bounding box
+                        if (!tagB.boundingBox || !tagB.collisionBox) {
+                            this.updateTagBoundingBox(tagB);
+                        }
+                        
+                        // Check for overlap between collision boxes
+                        if (!tagA.collisionBox || !tagB.collisionBox) continue;
+                        
+                        if (tagA.collisionBox.intersectsBox(tagB.collisionBox)) {
+                            // Calculate the overlap depth - use bounding boxes for more accurate results
+                            const box1 = tagA.boundingBox.clone();
+                            const box2 = tagB.boundingBox.clone();
+                            
+                            // Find centers of both boxes
+                            const center1 = new THREE.Vector3();
+                            const center2 = new THREE.Vector3();
+                            box1.getCenter(center1);
+                            box2.getCenter(center2);
+                            
+                            // Get direction from center1 to center2
+                            const dir = center2.clone().sub(center1).normalize();
+                            
+                            // Calculate sizes of both boxes
+                            const size1 = new THREE.Vector3();
+                            const size2 = new THREE.Vector3();
+                            box1.getSize(size1);
+                            box2.getSize(size2);
+                            
+                            // Get the distance between centers
+                            const distance = center1.distanceTo(center2);
+                            
+                            // Calculate the minimum distance needed to separate
+                            // Project half sizes onto separation direction
+                            const halfSize1 = Math.max(
+                                Math.abs(dir.x * size1.x * 0.5),
+                                Math.abs(dir.y * size1.y * 0.5),
+                                Math.abs(dir.z * size1.z * 0.5)
+                            );
+                            
+                            const halfSize2 = Math.max(
+                                Math.abs(dir.x * size2.x * 0.5),
+                                Math.abs(dir.y * size2.y * 0.5),
+                                Math.abs(dir.z * size2.z * 0.5)
+                            );
+                            
+                            // Minimum distance to separate
+                            const minDistance = halfSize1 + halfSize2;
+                            
+                            // Calculate overlap and movement needed
+                            const overlap = Math.max(0, minDistance - distance);
+                            
+                            if (overlap > 0) {
+                                // Calculate separation movement based on mass (heavier tags move less)
+                                const mass1 = physA.mass || 1;
+                                const mass2 = physB.mass || 1;
+                                
+                                // Use exponential mass ratio for more dramatic difference between small and large tags
+                                const totalMass = mass1 + mass2;
+                                const massRatio1 = Math.pow(mass2 / totalMass, 1.5); 
+                                const massRatio2 = Math.pow(mass1 / totalMass, 1.5);
+                                
+                                const moveFactorA = overlap * massRatio1;
+                                const moveFactorB = overlap * massRatio2;
+                                
+                                // Check if tags are currently repositioning - avoid jumps during animations
+                                const isAnimating = 
+                                    physA.flipStartElapsedTime || physB.flipStartElapsedTime || 
+                                    physA.targetAdjustment || physB.targetAdjustment;
+                                
+                                if (isAnimating) {
+                                    // Skip if either is currently animating
+                                    continue;
+                                } else {
+                                    // Apply direct movement
+                                    const moveA = dir.clone().multiplyScalar(-moveFactorA);
+                                    const moveB = dir.clone().multiplyScalar(moveFactorB);
+                                    
+                                    tagA.mesh.position.add(moveA);
+                                    tagB.mesh.position.add(moveB);
+                                    
+                                    // Nudge velocities too so tags keep separating naturally
+                                    // But use a much smaller factor to prevent extreme velocities
+                                    physA.velocity = physA.velocity || new THREE.Vector3(0, 0, 0);
+                                    physB.velocity = physB.velocity || new THREE.Vector3(0, 0, 0);
+                                    
+                                    // Use an even smaller velocity adjustment for larger mass differences
+                                    const velocityFactorA = 0.05 * (1 - massRatio1 * 0.5); // 0.025-0.05 range, smaller for larger tags
+                                    const velocityFactorB = 0.05 * (1 - massRatio2 * 0.5); // 0.025-0.05 range, smaller for larger tags
+                                    
+                                    physA.velocity.add(moveA.clone().multiplyScalar(velocityFactorA));
+                                    physB.velocity.add(moveB.clone().multiplyScalar(velocityFactorB));
+                                }
+                                
+                                // Flag that we moved something
+                                anyMoved = true;
+                                
+                                // Update collision times
+                                physA.lastCollisionElapsedTime = currentElapsedTime;
+                                physB.lastCollisionElapsedTime = currentElapsedTime;
+                                
+                                // Update boxes after moving
+                                this.updateTagBoundingBox(tagA);
+                                this.updateTagBoundingBox(tagB);
+                            }
+                        }
+                    }
                 }
             }
             
@@ -2384,10 +2722,13 @@ export class TagPhysics {
             if (!anyMoved) break;
         }
         
-        // Update all tag bounding boxes after resolution
-        for (const tagId of this.tags.keys()) {
-            const tag = this.getTagById(tagId);
-            if (tag && tag.mesh) this.updateTagBoundingBox(tag);
+        perfMetrics.collisionChecks = performance.now() - collisionStart;
+        perfMetrics.pairsChecked = totalPairsChecked;
+        perfMetrics.total = performance.now() - perfStart;
+        
+        // Log performance if slow
+        if (perfMetrics.total > 5) {
+            console.log('Overlap resolution performance:', perfMetrics);
         }
     }
 } 

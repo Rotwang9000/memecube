@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+//new
 import { LEDDisplay } from './led-display.js';
 import { JetsManager } from './jets.js';
 import { ButtonManager } from './buttons.js';
@@ -19,13 +20,26 @@ export class TokenScoreboard {
 		this.displayData = [];
 		this.isVisible = true;
 		this.sizeMode = 'hidden'; // Start in hidden mode
-		this.updateInterval = 30000; // Update every 30 seconds
+		this.updateInterval = 10000; // Update every 10 seconds
 		this.lastUpdateTime = 0;
 		this.isAnimatingMode = false;
 		this.isPositioningFirst = false;
 		
 		this.updateScreenPositionTimeout = null;
 		this.expandPlanet = null; // New dedicated expand planet
+		
+		// Camera movement tracking
+		this.lastCameraPosition = new THREE.Vector3();
+		this.lastCameraQuaternion = new THREE.Quaternion();
+		if (camera) {
+			this.lastCameraPosition.copy(camera.position);
+			this.lastCameraQuaternion.copy(camera.quaternion);
+		}
+		this.cameraMoveTime = 0;
+		this.cameraMovementTimeout = null;
+		this.cameraMovementThreshold = 0.005; // More sensitive detection (was 0.01)
+		this.cameraRotationThreshold = 0.005; // Detect small rotations too
+		this.cameraRestTimer = 400; // Slightly faster repositioning (was 500ms)
 		
 		// Get initial screen width for proper positioning
 		const initialWidth = window.innerWidth || 1200;
@@ -86,6 +100,10 @@ export class TokenScoreboard {
 		// Create corner jets after scoreboard structure is created
 		this.jetsManager = new JetsManager(this.scoreboardGroup, this.cornerBolts);
 		
+		// Store jetsManager reference in scoreboardGroup userData for animations to access
+		if (!this.scoreboardGroup.userData) this.scoreboardGroup.userData = {};
+		this.scoreboardGroup.userData.jetsManager = this.jetsManager;
+		
 		console.log("Token scoreboard created");
 		
 		// Create coordinate axes helper for debugging
@@ -97,6 +115,12 @@ export class TokenScoreboard {
 		// Update position initially
 		this._updateScreenPosition();
 		this.lastPosition.copy(this.scoreboardGroup.position);
+		
+		// Initialize camera position tracking
+		if (this.camera) {
+			this.lastCameraPosition.copy(this.camera.position);
+			this.lastCameraQuaternion.copy(this.camera.quaternion);
+		}
 		
 		// Ensure buttons are positioned correctly on initialization
 		if (this.buttonManager) {
@@ -115,11 +139,12 @@ export class TokenScoreboard {
 		this.changeSizeMode('hidden');
 
 		// Automatically resize to normal after a 1-second delay
-		// setTimeout(() => {
-		// 	console.log("Auto-resizing scoreboard to normal mode after delay");
-			
-		// 	this.changeSizeMode('normal');
-		// }, 7000);
+		setTimeout(() => {
+			console.log("Auto-resizing scoreboard to normal mode after delay");
+			this.changeSizeMode('normal');
+		}, 7000);
+
+		this.lastModeChangeTime = 0; // Timestamp of last size mode change to prevent double animations
 	}
 	
 	/**
@@ -188,6 +213,12 @@ export class TokenScoreboard {
 	_updateScreenPosition() {
 		console.log("Updating screen position");
 		if (!this.camera) return;
+
+		// Skip update if we're animating a mode change or if an animation is already in progress
+		if (this.isAnimatingMode || this.animationManager.isMoving) {
+			console.log("Skipping position update - currently animating");
+			return;
+		}
 
 		// Calculate the target position based on field of view
 		const fov = this.camera.fov * Math.PI / 180;
@@ -547,15 +578,73 @@ export class TokenScoreboard {
 	 * @param {string} mode - The new size mode ('normal', 'tall', 'hidden')
 	 */
 	changeSizeMode(mode) {
+		// Prevent rapid or duplicate size mode changes within 1 second
+		const now = performance.now();
+		if (now - (this.lastModeChangeTime || 0) < 1000) {
+			console.log(`Ignoring size mode change to ${mode} – called too soon after previous change.`);
+			return;
+		}
+		this.lastModeChangeTime = now;
+		
 		console.log(`Changing size mode to: ${mode}`);
 		if (this.sizeMode === mode) return;
 		
+		// Always fix bolt positions before starting any mode transition
+		// This ensures we start from a good state
+		this.fixBoltPositions();
+		
+		// Store the previous mode to handle transitions correctly
+		const previousMode = this.sizeMode;
 		this.sizeMode = mode;
+		
+		// Explicitly ensure LED display visibility when changing from hidden to normal/tall
+		if (previousMode === 'hidden' && (mode === 'normal' || mode === 'tall')) {
+			if (this.ledDisplay && this.ledDisplay.ledGroup) {
+				console.log('Explicitly setting LED display to visible for normal/tall mode');
+				this.ledDisplay.ledGroup.visible = true;
+			} else {
+				console.warn('LED display or ledGroup not found when trying to make visible');
+			}
+			
+			// Extra debug check for buttons
+			if (this.buttonManager) {
+				console.log('Button manager exists, checking buttons:');
+				console.log('- expandButton:', !!this.buttonManager.expandButton);
+				console.log('- collapseButton:', !!this.buttonManager.collapseButton);
+				
+				if (this.buttonManager.expandButton) {
+					this.buttonManager.expandButton.visible = true;
+					console.log('Set expandButton.visible = true');
+				}
+				if (this.buttonManager.collapseButton) {
+					this.buttonManager.collapseButton.visible = true;
+					console.log('Set collapseButton.visible = true');
+				}
+			} else {
+				console.warn('Button manager not found when trying to show buttons');
+			}
+		}
+		
+		// For transitions to hidden mode, ensure the expand planet is properly positioned
+		if (mode === 'hidden') {
+			if (this.expandPlanet) {
+				this.expandPlanet.visible = true;
+				this._positionExpandPlanetBottomRight();
+			}
+			// Make absolutely sure all bolts and their plates are hidden
+			if (this.cornerBolts) {
+				this.cornerBolts.forEach(bolt => {
+					bolt.visible = false;
+					if (bolt.userData?.plate) bolt.userData.plate.visible = false;
+				});
+			}
+		}
+		
 		this.updateScoreboardDimensions();
 		
 		// Ensure buttons are updated dynamically, especially when coming from hidden mode
 		if (mode === 'normal' && this.buttonManager) {
-			this.buttonManager.updateButtonPositions(this.scoreboardWidth, this.scoreboardHeight, mode);
+			this.buttonManager.updateButtonPositions(this.width, this.height, mode);
 			this.buttonManager.updateButtonColors(mode);
 			// Reset material properties to ensure visibility settings are correct
 			[this.buttonManager.expandButton, this.buttonManager.collapseButton, this.buttonManager.urlButton].forEach(button => {
@@ -570,6 +659,10 @@ export class TokenScoreboard {
 			});
 		}
 		
+		// Fix bolt positions again before starting animation
+		this.fixBoltPositions();
+		
+		// Animate the change in scoreboard dimensions
 		this.positionAndExpandScoreboard();
 		
 		// Save the mode to local storage to persist across sessions
@@ -589,6 +682,36 @@ export class TokenScoreboard {
 	positionAndExpandScoreboard() {
 		console.log("Starting two-phase animation: positioning first, then expanding height");
 		
+		// CRITICAL: Prevent double animations by early-returning if already animating
+		if (this.isAnimatingMode) {
+			console.log("Animation already in progress, ignoring additional animation request");
+			return;
+		}
+		
+		// Set animation flag to prevent position updates during animation
+		this.isAnimatingMode = true;
+		
+		// Force activate jets immediately before animation starts (pre-animation effect)
+		if (this.jetsManager && this.sizeMode !== 'hidden') {
+			this.jetsManager.syncJetsWithBolts(true); // Force update with particle emission
+			this.triggerJetEffect(1.0); // Maximum intensity to make jets very noticeable
+		}
+		
+		// Clear LED display during animation to reduce visual noise
+		if (this.ledDisplay) {
+			this.ledDisplay.clear();
+		}
+		
+		// Define the starting and target heights for animation
+		this.startHeight = this.height;
+		if (this.sizeMode === 'tall') {
+			this.targetHeight = this.computeExpandedHeight();
+		} else if (this.sizeMode === 'normal') {
+			this.targetHeight = 8; // Default normal height
+		} else {
+			this.targetHeight = 1; // Hidden mode height
+		}
+		
 		// Set fov-dependent target positions for top bolts
 		if (this.cornerBolts && this.cornerBolts.length >= 4) {
 			if (this.camera) {
@@ -603,32 +726,84 @@ export class TokenScoreboard {
 				// Calculate appropriate horizontal spread using utility function
 				const horizontalSpreadFactor = calculateHorizontalSpreadFactor(actualPixelWidth);
 				
-				// IMPORTANT: Fix coordinate confusion - corner bolts 0,2 are RIGHT side (positive X)
-				// and bolts 1,3 are LEFT side (negative X) in our index system
+				// Find bolts by their side property rather than by index
+				const rightBolts = this.cornerBolts.filter(bolt => bolt.userData.isRightSide);
+				const leftBolts = this.cornerBolts.filter(bolt => !bolt.userData.isRightSide);
 				
-				// Right-side top bolt (index 0)
-				this.cornerBolts[0].userData.targetTallPosition = new THREE.Vector3(
-					viewWidth * horizontalSpreadFactor, // Positive X = right side
-					viewHeight * 0.48,
-					this.cornerBolts[0].userData.originalPosition.z 
-				);
+				// Get top bolts from each side
+				const topRightBolt = rightBolts.find(bolt => bolt.position.y > 0) || rightBolts[0];
+				const topLeftBolt = leftBolts.find(bolt => bolt.position.y > 0) || leftBolts[0];
 				
-				// Left-side top bolt (index 1)
-				this.cornerBolts[1].userData.targetTallPosition = new THREE.Vector3(
-					-viewWidth * horizontalSpreadFactor, // Negative X = left side
-					viewHeight * 0.48,
-					this.cornerBolts[1].userData.originalPosition.z
-				);
+				// Set target positions for tall mode
+				if (topRightBolt) {
+					topRightBolt.userData.targetTallPosition = new THREE.Vector3(
+						viewWidth * horizontalSpreadFactor, // Positive X = right side
+						viewHeight * 0.48,
+						topRightBolt.userData.originalPosition?.z || -1.0
+					);
+				}
 				
-				console.log(`Setting target tall positions: Right=${viewWidth * horizontalSpreadFactor}, Left=${-viewWidth * horizontalSpreadFactor}`);
+				if (topLeftBolt) {
+					topLeftBolt.userData.targetTallPosition = new THREE.Vector3(
+						-viewWidth * horizontalSpreadFactor, // Negative X = left side
+						viewHeight * 0.48,
+						topLeftBolt.userData.originalPosition?.z || -1.0
+					);
+				}
+				
+				console.log("Set target tall positions for bolts:", 
+					`Right=${topRightBolt?.userData.targetTallPosition?.x.toFixed(2)}, `,
+					`Left=${topLeftBolt?.userData.targetTallPosition?.x.toFixed(2)}`);
 			}
 		}
+		
+		// Special handling for hidden to normal transition
+		const isHiddenToNormal = this.sizeMode === 'normal' && this.startHeight <= 1;
 		
 		// Temporary flag to indicate we're in position-first mode
 		this.isPositioningFirst = true;
 		
-		// Step 1: Update screen position to center without changing height
+		// Step 1: Update screen position without changing height yet
 		this._updateScreenPosition();
+		
+		// For hidden to normal, use a special starting position that's better for animation
+		if (isHiddenToNormal) {
+			// Ensure bolts are visible for the transition
+			this.cornerBolts?.forEach(bolt => {
+				bolt.visible = true;
+				if (bolt.userData.plate) {
+					bolt.userData.plate.visible = true;
+				}
+			});
+			
+			// Make sure the LED display is visible for normal mode
+			if (this.ledDisplay && this.ledDisplay.ledGroup) {
+				this.ledDisplay.ledGroup.visible = true;
+			}
+			
+			// Make the structure visible
+			if (this.scoreboardGroup.userData.displayMesh) {
+				this.scoreboardGroup.userData.displayMesh.visible = true;
+			}
+			if (this.scoreboardGroup.userData.backPanelMesh) {
+				this.scoreboardGroup.userData.backPanelMesh.visible = true;
+			}
+			
+			// Force sync jets with bolts after position update
+			if (this.jetsManager) {
+				this.jetsManager.syncJetsWithBolts(true); // Force update
+			}
+		}
+		
+		// Hide all bolts immediately when going to hidden mode
+		if (this.sizeMode === 'hidden') {
+			this.cornerBolts?.forEach(bolt => {
+				bolt.visible = false;
+				if (bolt.userData.plate) {
+					bolt.userData.plate.visible = false;
+				}
+			});
+		}
 		
 		// Set up a listener to detect when movement animation is complete
 		const checkMovementComplete = () => {
@@ -638,17 +813,20 @@ export class TokenScoreboard {
 				this.isPositioningFirst = false;
 				
 				// Trigger initial jet effect on movement completion to make jets noticeable
-				if (this.jetsManager) {
-					this.triggerJetEffect();
+				if (this.jetsManager && this.sizeMode !== 'hidden') {
+					// Force sync jets with bolts after position update
+					this.jetsManager.syncJetsWithBolts(true); // Force update to ensure proper positioning
+					this.triggerJetEffect(0.8);
 				}
 				
 				// Start the corner bolts animation to expand height
 				this.animationManager.animateCornerBolts(
 					this.cornerBolts,
-					true, // tall mode
+					this.sizeMode === 'tall', // True if tall mode
 					this.startHeight,
 					this.targetHeight,
-					(newHeight) => {
+					(newHeight, progress) => {
+						// Update height and dimensions during animation
 						this.height = newHeight;
 						this.updateScoreboardDimensions();
 						
@@ -657,9 +835,15 @@ export class TokenScoreboard {
 							this.ledDisplay.height = newHeight;
 						}
 						
-						// Periodically trigger jet effects during animation
-						if (this.jetsManager && Math.random() < 0.1) {
-							this.triggerJetEffect(0.5);
+						// Force jets to sync with bolt positions during animation
+						if (this.jetsManager && this.sizeMode !== 'hidden') {
+							// Force sync at more frequent intervals and every time progress changes
+							this.jetsManager.syncJetsWithBolts(true);
+							
+							// Periodically trigger jet effects
+							if (Math.random() < 0.08) { // Increased chance from 0.1 to 0.08
+								this.triggerJetEffect(0.7);
+							}
 						}
 					},
 					() => this.finalizeSizeModeChange()
@@ -667,37 +851,120 @@ export class TokenScoreboard {
 			} else {
 				// Still moving, check again soon
 				requestAnimationFrame(checkMovementComplete);
+				
+				// Sync jets with bolts during position movement too
+				if (this.jetsManager && this.sizeMode !== 'hidden') {
+					this.jetsManager.syncJetsWithBolts();
+				}
 			}
 		};
 		
 		// Start checking if we're moving
 		if (this.animationManager.isMoving) {
 			// Already moving, wait for it to complete
+			console.log("Animation in progress, waiting for completion");
 			checkMovementComplete();
 		} else {
 			// Not moving, maybe no animation was needed, go straight to height animation
+			console.log("No movement animation needed, going straight to height animation");
 			this.isPositioningFirst = false;
-			this.animationManager.animateCornerBolts(
-				this.cornerBolts,
-				true, // tall mode
-				this.startHeight,
-				this.targetHeight,
-				(newHeight) => {
-					this.height = newHeight;
-					this.updateScoreboardDimensions();
+			
+			// Force sync jets with bolts before animation
+			if (this.jetsManager && this.sizeMode !== 'hidden') {
+				this.jetsManager.syncJetsWithBolts(true); // Force update
+			}
+			
+			// Special case for hidden -> normal transition
+			if (isHiddenToNormal) {
+				// Add a brief delay for smoother visual transition
+				setTimeout(() => {
+					// Set initial height to make sure animation works properly
+					this.height = 1; // Start from 1 high
 					
-					// Update LED display height during animation
-					if (this.ledDisplay) {
-						this.ledDisplay.height = newHeight;
+					// Trigger a jet effect before starting the animation for visual feedback
+					if (this.jetsManager) {
+						this.triggerJetEffect(0.9);
 					}
 					
-					// Periodically trigger jet effects during animation
-					if (this.jetsManager && Math.random() < 0.1) {
-						this.triggerJetEffect(0.5);
+					// Start the height animation
+					this.animationManager.animateCornerBolts(
+						this.cornerBolts,
+						false, // Not tall mode
+						this.height,
+						this.targetHeight,
+						(newHeight, progress) => {
+							// Update height and dimensions during animation
+							this.height = newHeight;
+							this.updateScoreboardDimensions();
+							
+							// Update LED display height
+							if (this.ledDisplay) {
+								this.ledDisplay.height = newHeight;
+							}
+							
+							// Force jets to sync with bolt positions during animation
+							if (this.jetsManager) {
+								// Force sync every animation frame to ensure perfect sync
+								this.jetsManager.syncJetsWithBolts(true);
+							}
+							
+							// Fade in the LED display
+							if (this.ledDisplay && this.ledDisplay.ledGroup) {
+								this.ledDisplay.ledGroup.visible = true;
+								// Gradually increase opacity during animation
+								this.ledDisplay.ledGroup.traverse(obj => {
+									if (obj.material && obj.material.opacity !== undefined) {
+										obj.material.opacity = Math.min(1.0, progress * 2);
+									}
+								});
+							}
+							
+							// Periodically trigger jet effects for visual feedback
+							if (this.jetsManager && Math.random() < 0.15) {
+								this.triggerJetEffect(0.6 * progress);
+							}
+						},
+						() => {
+							console.log("Height animation complete, finalizing hidden->normal transition");
+							this.finalizeSizeModeChange();
+						}
+					);
+				}, 100); // Short delay for visual effect
+			} else {
+				// Normal animation for other transitions
+				this.animationManager.animateCornerBolts(
+					this.cornerBolts,
+					this.sizeMode === 'tall', // True if tall mode
+					this.startHeight || this.height,
+					this.targetHeight,
+					(newHeight, progress) => {
+						// Update height and dimensions during animation
+						this.height = newHeight;
+						this.updateScoreboardDimensions();
+						
+						// Update LED display height
+						if (this.ledDisplay) {
+							this.ledDisplay.height = newHeight;
+						}
+						
+						// Force jets to sync with bolt positions during animation
+						if (this.jetsManager && this.sizeMode !== 'hidden') {
+							// Force sync EVERY frame during animation for perfect synchronization
+							this.jetsManager.syncJetsWithBolts(true);
+						}
+						
+						// Periodically trigger jet effects
+						if (this.jetsManager && this.sizeMode !== 'hidden' && Math.random() < 0.1) {
+							this.triggerJetEffect(0.5);
+						}
+					},
+					() => {
+						// Finalize size mode change after animation completes
+						console.log("Height animation complete, finalizing size mode change");
+						this.finalizeSizeModeChange();
 					}
-				},
-				() => this.finalizeSizeModeChange()
-			);
+				);
+			}
 		}
 	}
 	
@@ -710,23 +977,38 @@ export class TokenScoreboard {
 		
 		console.log(`Triggering jet effect with intensity ${intensity}`);
 		
+		// First force sync jets with bolts to ensure proper positioning
+		this.jetsManager.syncJetsWithBolts(true);
+		
 		// Create random movement vectors for each corner
 		this.cornerBolts.forEach((bolt, index) => {
-			// Create a random movement direction, mostly perpendicular to the bolt's position
+			// Skip if bolt isn't visible
+			if (!bolt.visible) {
+				console.log("Bolt is not visible, skipping jet effect");
+				return;
+			}
+			
+			// Find the matching jet for this bolt
+			const jet = this.jetsManager.jets[index];
+			if (!jet) {
+				console.log(`No matching jet found for bolt ${index}`);
+				return;
+			}
+			
+			// Create a random movement direction with strong backwards component
 			const moveDir = new THREE.Vector3(
-				(Math.random() - 0.5) * 0.25,  // Increased from 0.1
-				(Math.random() - 0.5) * 0.25,  // Increased from 0.1
-				(Math.random() - 0.5) * 0.15 - 0.2 * intensity // Mostly away from screen, doubled z intensity
+				(Math.random() - 0.5) * 0.4,   // Wider horizontal spread
+				(Math.random() - 0.5) * 0.4,   // Wider vertical spread
+				(Math.random() - 0.5) * 0.2 - 0.8 * intensity // Strong backward Z component
 			);
 			
-			// Activate the corresponding jet
-			if (this.jetsManager.jets && index < this.jetsManager.jets.length) {
-				const jet = this.jetsManager.jets[index];
-				// Emit more particles for better visibility
-				const particleCount = Math.ceil(10 * intensity); // Doubled from 5
-				for (let i = 0; i < particleCount; i++) {
-					this.jetsManager.emitJetParticle(jet, moveDir, intensity * 2.0); // Doubled intensity
-				}
+			// Ensure jet base position matches bolt position exactly
+			jet.basePosition.copy(bolt.position);
+			
+			// Emit particles directly - more particles for higher visibility
+			const particleCount = Math.ceil(30 * intensity); // Increased from 20
+			for (let i = 0; i < particleCount; i++) {
+				this.jetsManager.emitJetParticle(jet, moveDir, intensity * 2.0); // Double intensity
 			}
 		});
 		
@@ -735,11 +1017,42 @@ export class TokenScoreboard {
 			this.jetsManager.lastMovementTime = performance.now();
 		}
 		
-		// Schedule an echo effect for better visibility
-		if (intensity > 0.5) {
-			setTimeout(() => {
-				this.triggerJetEffect(intensity * 0.6);
-			}, 200); // Add a second burst after 200ms
+		// Schedule multiple echo effects for better visibility and longer duration
+		if (intensity > 0.3) {
+			// Create 3 echo effects with decreasing intensity and ensure sync on each echo
+			for (let i = 1; i <= 3; i++) {
+				setTimeout(() => {
+					// Re-sync jets and bolts before each echo effect
+					this.jetsManager.syncJetsWithBolts(true);
+					
+					// Create the echo effect
+					this.cornerBolts.forEach((bolt, index) => {
+						if (!bolt.visible) return;
+						
+						const jet = this.jetsManager.jets[index];
+						if (!jet) return;
+						
+						// Ensure jet position matches bolt precisely
+						jet.basePosition.copy(bolt.position);
+						
+						// Create echo direction vector
+						const echoDir = new THREE.Vector3(
+							(Math.random() - 0.5) * 0.3,
+							(Math.random() - 0.5) * 0.3,
+							-0.6 * (1 - i * 0.2) * intensity
+						);
+						
+						// Emit fewer particles for echo effects
+						const echoCount = Math.ceil(15 * intensity * (1 - i * 0.2));
+						for (let j = 0; j < echoCount; j++) {
+							this.jetsManager.emitJetParticle(jet, echoDir, intensity * (1 - i * 0.2));
+						}
+					});
+					
+					// Update last movement time to prevent fade
+					this.jetsManager.lastMovementTime = performance.now();
+				}, i * 150); // Spread out over time
+			}
 		}
 	}
 	
@@ -750,6 +1063,33 @@ export class TokenScoreboard {
 	finalizeSizeModeChange() {
 		// Update dimensions (frame, background, LED rows, jets, etc.)
 		this.updateScoreboardDimensions();
+		
+		// Fix bolt positions at the end of animation as a final safeguard
+		this.fixBoltPositions();
+		
+		// Make sure cornerBolts have correct isRightSide properties
+		if (this.cornerBolts && this.cornerBolts.length >= 4) {
+			// Find right and left bolts
+			const rightBolts = this.cornerBolts.filter(bolt => bolt.userData.isRightSide);
+			const leftBolts = this.cornerBolts.filter(bolt => !bolt.userData.isRightSide);
+			
+			console.log(`Checking bolts: ${rightBolts.length} right bolts, ${leftBolts.length} left bolts`);
+			
+			// Make sure bolt colors match their side
+			rightBolts.forEach(bolt => {
+				if (bolt.material) {
+					bolt.material.color.set(0xDAA520); // Gold for right
+					bolt.material.emissive.set(0xDAA520);
+				}
+			});
+			
+			leftBolts.forEach(bolt => {
+				if (bolt.material) {
+					bolt.material.color.set(0x00ff00); // Green for left
+					bolt.material.emissive.set(0x00ff00);
+				}
+			});
+		}
 		
 		// Completely recreate the LED display to prevent duplicate issues when switching modes
 		if (this.ledDisplay) {
@@ -771,6 +1111,13 @@ export class TokenScoreboard {
 			// Ensure LED display visibility matches size mode
 			if (this.ledDisplay.ledGroup) {
 				this.ledDisplay.ledGroup.visible = this.sizeMode !== 'hidden';
+				
+				// Reset opacity for all LEDs
+				this.ledDisplay.ledGroup.traverse(obj => {
+					if (obj.material && obj.material.opacity !== undefined) {
+						obj.material.opacity = 1.0;
+					}
+				});
 			}
 		}
 		
@@ -779,6 +1126,126 @@ export class TokenScoreboard {
 		
 		// Now it's safe to update screen position
 		this._updateScreenPosition();
+		
+		// When changing to normal/tall mode, ensure everything is visible
+		if (this.sizeMode !== 'hidden') {
+			// Make bolts visible with the correct left/right positioning
+			if (this.cornerBolts && this.cornerBolts.length >= 4) {
+				const rightBolts = this.cornerBolts.filter(bolt => bolt.userData.isRightSide);
+				const leftBolts = this.cornerBolts.filter(bolt => !bolt.userData.isRightSide);
+				
+				const halfWidth = this.width / 2;
+				const halfHeight = this.height / 2;
+				
+				// Position right side bolts (gold)
+				rightBolts.forEach(bolt => {
+					const isTopRow = bolt.position.y > 0;
+					const yPos = isTopRow ? (halfHeight + 0.1) : (-halfHeight - 0.1);
+					bolt.position.set(halfWidth + 0.45, yPos, -1.0);
+					bolt.visible = true;
+					
+					if (bolt.userData.plate) {
+						bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.9);
+						bolt.userData.plate.visible = true;
+					}
+				});
+				
+				// Position left side bolts (green)
+				leftBolts.forEach(bolt => {
+					const isTopRow = bolt.position.y > 0;
+					const yPos = isTopRow ? (halfHeight + 0.1) : (-halfHeight - 0.1);
+					bolt.position.set(-halfWidth - 0.45, yPos, -1.0);
+					bolt.visible = true;
+					
+					if (bolt.userData.plate) {
+						bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.9);
+						bolt.userData.plate.visible = true;
+					}
+				});
+			}
+			
+			// Make display structure visible
+			if (this.scoreboardGroup?.userData) {
+				const displayMesh = this.scoreboardGroup.userData.displayMesh;
+				const backMesh = this.scoreboardGroup.userData.backPanelMesh;
+				
+				if (displayMesh) displayMesh.visible = true;
+				if (backMesh) backMesh.visible = true;
+			}
+			
+			// Make jets visible
+			if (this.jetsManager && this.jetsManager.jets) {
+				this.jetsManager.jets.forEach(jet => {
+					if (jet) jet.visible = true;
+				});
+			}
+			
+			// Make buttons visible and positioned correctly
+			if (this.buttonManager) {
+				// Update button positions
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+				
+				// Ensure appropriate buttons are visible
+				if (this.buttonManager.expandButton) {
+					this.buttonManager.expandButton.visible = true;
+					console.log("Setting expand button visible: true");
+					
+					// Force the arrow indicator to be visible
+					this.buttonManager.expandButton.children.forEach((child, i) => {
+						child.visible = true;
+						console.log(`Setting expand button child ${i} visible`);
+						
+						// Force render order and depth settings to ensure visibility
+						if (child.material) {
+							child.material.depthTest = false;
+							child.renderOrder = 100;
+						}
+						
+						// If this is a group (like arrow group), ensure its children are visible
+						if (child.children && child.children.length > 0) {
+							child.children.forEach(grandchild => {
+								grandchild.visible = true;
+								if (grandchild.material) {
+									grandchild.material.depthTest = false;
+									grandchild.renderOrder = 100;
+								}
+							});
+						}
+					});
+				}
+				
+				if (this.buttonManager.collapseButton) {
+					this.buttonManager.collapseButton.visible = true;
+					console.log("Setting collapse button visible: true");
+					
+					// Force the arrow indicator to be visible
+					this.buttonManager.collapseButton.children.forEach((child, i) => {
+						child.visible = true;
+						console.log(`Setting collapse button child ${i} visible`);
+						
+						// Force render order and depth settings to ensure visibility
+						if (child.material) {
+							child.material.depthTest = false;
+							child.renderOrder = 100;
+						}
+						
+						// If this is a group (like arrow group), ensure its children are visible
+						if (child.children && child.children.length > 0) {
+							child.children.forEach(grandchild => {
+								grandchild.visible = true;
+								if (grandchild.material) {
+									grandchild.material.depthTest = false;
+									grandchild.renderOrder = 100;
+								}
+							});
+						}
+					});
+				}
+				
+				// Force visibility update with immediate position correction
+				this.buttonManager.updateButtonColors(this.sizeMode);
+			}
+		}
 		
 		// Trigger a final jet effect for visual feedback if not in hidden mode
 		if (this.jetsManager && this.sizeMode !== 'hidden') {
@@ -820,21 +1287,22 @@ export class TokenScoreboard {
 			
 			// Special handling for hidden mode - ensure only expand button is visible
 			if (this.sizeMode === 'hidden') {
-				// Hide all bolts
+				// Hide every bolt and its plate completely
 				if (this.cornerBolts) {
 					this.cornerBolts.forEach(bolt => {
 						bolt.visible = false;
+						if (bolt.userData?.plate) bolt.userData.plate.visible = false;
 					});
 				}
 				
-				// Make sure only the expand button is visible
+				// Ensure only the dedicated expand button remains visible
 				this.scoreboardGroup.traverse(obj => {
-					// Skip the group itself
+					// Keep the root group visible
 					if (obj === this.scoreboardGroup) return;
 					
-					// Skip expand button
+					// Keep expand button hierarchy visible
 					if (this.buttonManager && (
-						obj === this.buttonManager.expandButton || 
+						obj === this.buttonManager.expandButton ||
 						(obj.parent && obj.parent === this.buttonManager.expandButton))) {
 						obj.visible = true;
 						return;
@@ -865,88 +1333,144 @@ export class TokenScoreboard {
 			this._originalBoltPositions = this.cornerBolts.map(bolt => ({
 				x: bolt.position.x,
 				y: bolt.position.y,
-				z: bolt.position.z
+				z: bolt.position.z,
+				isRightSide: bolt.userData.isRightSide
 			}));
 			console.log("Original bolt positions saved for future reference");
 		}
 		
-		// Calculate bolt positions based on current width and height - this ensures consistency
-		const calculateBoltPosition = (index, width, height) => {
-			const halfWidth = width / 2;
-			const halfHeight = height / 2;
-			const cornerOffsets = [
-				[-halfWidth - 0.45, halfHeight + 0.1, -1.0], // Top-left
-				[halfWidth + 0.45, halfHeight + 0.1, -1.0],  // Top-right
-				[-halfWidth - 0.45, -halfHeight - 0.1, -1.0], // Bottom-left
-				[halfWidth + 0.45, -halfHeight - 0.1, -1.0]   // Bottom-right
-			];
-			return cornerOffsets[index];
-		};
+		// Track whether any bolt position has changed
+		let boltPositionsChanged = false;
+		let startingPositions = [];
 		
-		// Update bolt positions
+		// Store starting positions of bolts for comparison
 		if (this.cornerBolts && this.cornerBolts.length >= 4) {
+			startingPositions = this.cornerBolts.map(bolt => bolt.position.clone());
+		}
+		
+		// Update bolt positions - CRITICAL: Use consistent left/right positioning
+		if (this.cornerBolts && this.cornerBolts.length >= 4) {
+			const halfWidth = this.width / 2;
+			const halfHeight = this.height / 2;
+			
+			// Find bolts by their side property rather than by index
+			const rightBolts = this.cornerBolts.filter(bolt => bolt.userData.isRightSide);
+			const leftBolts = this.cornerBolts.filter(bolt => !bolt.userData.isRightSide);
+			
 			if (this.sizeMode === 'hidden') {
-				// Hide all bolts in hidden mode, except bottom right one
-				for (let i = 0; i < 3; i++) {
-					this.cornerBolts[i].visible = false;
-				}
+				// Hide ALL bolts in hidden mode
+				this.cornerBolts.forEach(bolt => {
+					bolt.visible = false;
+					if (bolt.userData.plate) {
+						bolt.userData.plate.visible = false;
+					}
+				});
 				
-				// Keep only bottom right bolt (index 3) visible
-				const [boltX, boltY, boltZ] = calculateBoltPosition(3, this.width, this.height);
-				this.cornerBolts[3].position.set(boltX, boltY, boltZ);
-				this.cornerBolts[3].visible = true;
-				
-				console.log("Hidden mode: Kept bottom right bolt visible at ", 
-					this.cornerBolts[3].position.x,
-					this.cornerBolts[3].position.y,
-					this.cornerBolts[3].position.z);
+				console.log("Hidden mode: All bolts hidden");
 			} else {
-				// True corners for normal/tall
-				// Ensure all bolts are visible when not in hidden mode
-				for (let i = 0; i < 4; i++) {
-					// Calculate position based on current width and height
-					const [x, y, z] = calculateBoltPosition(i, this.width, this.height);
-					
-					// Update position
-					this.cornerBolts[i].position.set(x, y, z);
-					this.cornerBolts[i].visible = true;
-				}
+				// For normal & tall modes - position all bolts properly based on isRightSide
 				
-				console.log("Normal/tall mode: Updated all bolt positions consistently");
+				// Position right side bolts (gold)
+				rightBolts.forEach(bolt => {
+					const isTopRow = bolt.position.y > 0 || 
+					                (this.sizeMode !== 'tall' && bolt === rightBolts[0]);
+					
+					// Calculate Y position based on whether it's a top or bottom bolt
+					const yPos = isTopRow ? (halfHeight + 0.1) : (-halfHeight - 0.1);
+					
+					// Store original position for comparison
+					const originalX = bolt.position.x;
+					const originalY = bolt.position.y;
+					
+					// Set the position - always on right side (positive X)
+					bolt.position.set(halfWidth + 0.45, yPos, -1.0);
+					bolt.visible = true;
+					
+					// Check if position changed significantly
+					if (Math.abs(originalX - bolt.position.x) > 0.001 || 
+					    Math.abs(originalY - bolt.position.y) > 0.001) {
+						boltPositionsChanged = true;
+					}
+					
+					// Update plate position if it exists
+					if (bolt.userData.plate) {
+						bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.9);
+						bolt.userData.plate.visible = true;
+					}
+					
+					// Set gold color for right side
+					if (bolt.material) {
+						bolt.material.color.set(0xDAA520); // Gold 
+						bolt.material.emissive.set(0xDAA520);
+					}
+				});
+				
+				// Position left side bolts (green)
+				leftBolts.forEach(bolt => {
+					const isTopRow = bolt.position.y > 0 || 
+					               (this.sizeMode !== 'tall' && bolt === leftBolts[0]);
+					
+					// Calculate Y position based on whether it's a top or bottom bolt
+					const yPos = isTopRow ? (halfHeight + 0.1) : (-halfHeight - 0.1);
+					
+					// Store original position for comparison
+					const originalX = bolt.position.x;
+					const originalY = bolt.position.y;
+					
+					// Set the position - always on left side (negative X)
+					bolt.position.set(-halfWidth - 0.45, yPos, -1.0);
+					bolt.visible = true;
+					
+					// Check if position changed significantly
+					if (Math.abs(originalX - bolt.position.x) > 0.001 || 
+					    Math.abs(originalY - bolt.position.y) > 0.001) {
+						boltPositionsChanged = true;
+					}
+					
+					// Update plate position if it exists
+					if (bolt.userData.plate) {
+						bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.9);
+						bolt.userData.plate.visible = true;
+					}
+					
+					// Set green color for left side
+					if (bolt.material) {
+						bolt.material.color.set(0x00ff00); // Green
+						bolt.material.emissive.set(0x00ff00);
+					}
+				});
+				
+				console.log("Normal/tall mode: Positioned all bolts at corners based on isRightSide property");
 			}
 			
-			// Set different colors for left and right bolts
-			this.cornerBolts[0].material.color.set(0x00ff00); // Green for left
-			this.cornerBolts[1].material.color.set(0xDAA520); // Gold for right
-			this.cornerBolts[2].material.color.set(0x00ff00); // Green for left
-			this.cornerBolts[3].material.color.set(0xDAA520); // Gold for right
-			
 			// Log bolt positions for debugging
-			console.log("Bolt positions:");
+			console.log("Bolt positions after update:");
 			this.cornerBolts.forEach((bolt, i) => {
-				console.log(`Bolt ${i}: x=${bolt.position.x}, y=${bolt.position.y}, z=${bolt.position.z}, visible=${bolt.visible}`);
+				console.log(`Bolt ${i}: x=${bolt.position.x.toFixed(2)}, y=${bolt.position.y.toFixed(2)}, isRightSide=${bolt.userData.isRightSide}, visible=${bolt.visible}`);
 			});
 			
-			// Always sync jets after bolt move
+			// Always sync jets after bolt move, with force update if positions changed
 			if (this.jetsManager) {
-				this.jetsManager.syncJetsWithBolts();
+				this.jetsManager.syncJetsWithBolts(boltPositionsChanged);
+				
+				// If bolt positions changed significantly, trigger a jet effect
+				if (boltPositionsChanged && this.sizeMode !== 'hidden') {
+					console.log("Bolt positions changed - triggering jet effect");
+					this.triggerJetEffect(0.7); // Moderate intensity for position changes
+				}
 			}
 		}
 		
 		// Always update button positions after dimension change
 		if (this.buttonManager) {
-			this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
-			
-			// Show only buttonManager in hidden mode
+			// In hidden mode, position the expand button centrally
 			if (this.sizeMode === 'hidden') {
-				// Make sure expand button is visible with good positioning
 				if (this.buttonManager.expandButton) {
+					this.buttonManager.expandButton.position.set(0, 0, -1.0);
 					this.buttonManager.expandButton.visible = true;
-					this.buttonManager.expandButton.position.set(1.5, -1.0, -1.0);
 					
 					// Make sure the expand button is clearly visible
-					const expandButton = this.buttonManager.expandButton;
-					expandButton.traverse(obj => {
+					this.buttonManager.expandButton.traverse(obj => {
 						if (obj.material) {
 							obj.material.depthTest = false;
 							obj.renderOrder = 100;
@@ -954,23 +1478,39 @@ export class TokenScoreboard {
 					});
 				}
 				
-				// Make the URL button visible as a planet in hidden mode
-				if (this.buttonManager.urlButton) {
-					this.buttonManager.urlButton.visible = true;
-					this.buttonManager.urlButton.position.set(3.0, -1.0, -1.0);
+				// Hide all other buttons
+				if (this.buttonManager.collapseButton) {
+					this.buttonManager.collapseButton.visible = false;
+				}
+				if (this.buttonManager.exitButton) {
+					this.buttonManager.exitButton.visible = false;
+				}
+				this.buttonManager.socialButtons.forEach(btn => {
+					if (btn) btn.visible = false;
+				});
+			} else {
+				// For normal and tall modes, use the standard button positioning
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+			}
+			
+			// Special handling for hidden mode - ensure only expand button is visible
+			if (this.sizeMode === 'hidden') {
+				// Hide all scoreboard elements except the expand button
+				this.scoreboardGroup.traverse(obj => {
+					// Skip the group itself
+					if (obj === this.scoreboardGroup) return;
 					
-					// Make sure the URL button is clearly visible
-					const urlButton = this.buttonManager.urlButton;
-					urlButton.traverse(obj => {
-						if (obj.material) {
-							obj.material.depthTest = false;
-							obj.renderOrder = 100;
-						}
-					});
-				}
-				
-				// Make sure social buttons are forcibly set to visible in hidden mode
-				this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+					// Skip expand button
+					if (this.buttonManager && (
+						obj === this.buttonManager.expandButton || 
+						(obj.parent && obj.parent === this.buttonManager.expandButton))) {
+						obj.visible = true;
+						return;
+					}
+					
+					// Hide everything else
+					obj.visible = false;
+				});
 			}
 		}
 		
@@ -1363,22 +1903,24 @@ export class TokenScoreboard {
 				const sellTxns = formatCompactNumber(txns.sells ?? 0);
 				
 				// Draw buys in green, sells in red
-				d.drawText('BUY:', row, 0, 'green');
-				d.drawText(buyTxns.toString(), row, 16, 'white');
+				d.drawText('B:', row, 0, 'green');
+				d.drawText(buyTxns.toString(), row, 12, 'white');
 				
-				d.drawText('SELL:', row, 50, 'red');
-				d.drawText(sellTxns.toString(), row, 70, 'white');
+				d.drawText('S:', row, 40, 'red');
+				d.drawText(sellTxns.toString(), row, 52, 'white');
 				
 				// Buy/sell ratio
-				const ratio = sellTxns > 0 ? (buyTxns / sellTxns).toFixed(2) : 'N/A';
-				row += 6;
-				d.drawText('B/S RATIO:', row, 2, 'white');
-				d.drawText(ratio, row, 36, (ratio > 1 && ratio !== 'N/A') ? 'green' : 'red');
+				const ratio = sellTxns > 0 ? (buyTxns / sellTxns).toFixed(2) : '';
+				d.drawText(ratio, row, 80, (ratio > 1 && ratio !== '') ? 'green' : 'red');
+				if(ratio !== '') {
+					d.drawText('%', row, 92, 'white');
+				}
 			} else {
 				// No transaction data
 				d.drawText('TXS: NO DATA', row, 2, 'white');
 				row += 6;
 			}
+			row += 6;
 			
 			// Show liquidity if available
 			if (this.detailToken.liquidity?.usd) {
@@ -1433,77 +1975,89 @@ export class TokenScoreboard {
 	}
 	
 	/**
-	 * Update the display - called each frame
+	 * Update - called each frame
 	 */
 	update(deltaTime) {
 		if (!this.isVisible) return;
 		
+		// Ensure jets are always updated regardless of mode
+		if (this.jetsManager) {
+			this.jetsManager.update(deltaTime || 1/60);
+		}
+		
+		// Check for camera movement and trigger repositioning when it stops
+		if (this.camera && !this.isAnimatingMode) {
+			const currentPos = this.camera.position.clone();
+			const currentQuat = this.camera.quaternion.clone();
+			
+			// Check if camera has moved
+			const positionDelta = currentPos.distanceTo(this.lastCameraPosition);
+			const quaternionDelta = 1 - currentQuat.dot(this.lastCameraQuaternion);
+			
+			if (positionDelta > this.cameraMovementThreshold || quaternionDelta > this.cameraRotationThreshold) {
+				// Camera is moving
+				this.cameraMoveTime = performance.now();
+				
+				// Store new position/rotation
+				this.lastCameraPosition.copy(currentPos);
+				this.lastCameraQuaternion.copy(currentQuat);
+				
+				// Clear any pending reposition timeout
+				if (this.cameraMovementTimeout) {
+					clearTimeout(this.cameraMovementTimeout);
+					this.cameraMovementTimeout = null;
+				}
+				
+				// Set timeout to reposition after movement stops
+				this.cameraMovementTimeout = setTimeout(() => {
+					console.log("Camera stopped moving - repositioning scoreboard");
+					this.updatePositionAfterCameraMovement();
+					this.cameraMovementTimeout = null;
+				}, this.cameraRestTimer);
+			}
+		}
+		
 		// Update the coordinate axes helper position
 		this.updateCoordinateAxesHelper();
 		
-		// In hidden mode, only update the expand button, hide everything else
+		// Handle display modes - HANDLE PLANET ONLY HERE, NOT IN _updateScreenPosition
 		if (this.sizeMode === 'hidden') {
-			// Hide all bolts
-			if (this.cornerBolts && this.cornerBolts.length >= 4) {
-				for (let i = 0; i < this.cornerBolts.length; i++) {
-					this.cornerBolts[i].visible = false;
-				}
-			}
+			// For hidden mode, make sure only the expand button is visible
 			
-			// Hide LED display in hidden mode
-			if (this.ledDisplay && this.ledDisplay.ledGroup) {
-				this.ledDisplay.ledGroup.visible = false;
-			}
-			
-			// Hide jets in hidden mode
-			if (this.jetsManager && this.jetsManager.jets) {
-				this.jetsManager.jets.forEach(jet => {
-					if (jet) jet.visible = false;
-				});
-			}
-			
-			// Hide display structure in hidden mode
-			if (this.scoreboardGroup?.userData) {
-				const displayMesh = this.scoreboardGroup.userData.displayMesh;
-				const backMesh = this.scoreboardGroup.userData.backPanelMesh;
-				
-				if (displayMesh) displayMesh.visible = false;
-				if (backMesh) backMesh.visible = false;
-			}
-			
-			// Only keep the expand button visible in hidden mode
-			if (this.buttonManager) {
-				// Hide all buttons except the expand button
-				if (this.buttonManager.expandButton) {
-					this.buttonManager.expandButton.visible = true;
-					
-					// Make sure the expand button is clearly visible
-					this.buttonManager.expandButton.traverse(obj => {
-						if (obj.material) {
-							obj.material.depthTest = false;
-							obj.renderOrder = 100;
-						}
-					});
-				}
-				
-				// Hide other buttons
-				if (this.buttonManager.collapseButton) {
-					this.buttonManager.collapseButton.visible = false;
-				}
-				
-				if (this.buttonManager.exitButton) {
-					this.buttonManager.exitButton.visible = false;
-				}
-				
-				// Hide social buttons in hidden mode
-				this.buttonManager.socialButtons.forEach(btn => {
-					if (btn) btn.visible = false;
-				});
-			}
-			
-			// Make sure the dedicated expand planet is visible in hidden mode
+			// CRITICAL: Make sure the dedicated expand planet is visible and consistently in bottom right
 			if (this.expandPlanet) {
 				this.expandPlanet.visible = true;
+				
+				// Force position update every frame to prevent any position changes
+				this._positionExpandPlanetBottomRight();
+				
+				// Ensure all materials are set to be always visible
+				this.expandPlanet.traverse(obj => {
+					if (obj.material) {
+						obj.material.depthTest = false;
+						obj.renderOrder = 2000; // Very high render order
+						if (obj.material.transparent) {
+							obj.material.opacity = 1.0; // Full opacity
+						}
+					}
+				});
+			}
+			
+			// Make sure the button manager's buttons are also visible
+			if (this.buttonManager) {
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+				this.buttonManager.updateButtonColors(this.sizeMode);
+				
+				// Ensure expand button is visible
+				if (this.buttonManager.expandButton) {
+					this.buttonManager.expandButton.visible = true;
+				}
+				if (this.buttonManager.collapseButton) {
+					this.buttonManager.collapseButton.visible = true;
+				}
+				
+				// Force social buttons to be visible in hidden mode
+				this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
 			}
 			
 			return; // Skip the rest of the update in hidden mode
@@ -1512,6 +2066,9 @@ export class TokenScoreboard {
 			if (this.expandPlanet) {
 				this.expandPlanet.visible = false;
 			}
+			
+			// No more per-frame bolt position fixing - it fights with animations
+			// Bolt positions are now only fixed at the end of animations
 		}
 		
 		// Normal update for visible modes
@@ -1519,7 +2076,11 @@ export class TokenScoreboard {
 		// First sync jets with bolts and detect movement
 		if (this.jetsManager) {
 			this.jetsManager.syncJetsWithBolts();
-			this.jetsManager.update(deltaTime || 1/60);
+		}
+		
+		// Skip LED display updates during mode transitions/animations
+		if (this.isAnimatingMode) {
+			return; // Don't update LED display during resize animations
 		}
 		
 		// Clear display first
@@ -1831,37 +2392,41 @@ export class TokenScoreboard {
 		// Create a group for the expand planet
 		this.expandPlanet = new THREE.Group();
 		
-		// Create a sphere for the expand button
-		const sphereGeometry = new THREE.SphereGeometry(0.8, 16, 16);
+		// Create a sphere for the expand button with brighter color
+		const sphereGeometry = new THREE.SphereGeometry(0.8, 32, 32); // More segments for smoother appearance
 		const sphereMaterial = new THREE.MeshBasicMaterial({
-			color: 0x00ff00,
+			color: 0x00ff00, // Bright green
 			transparent: true,
-			opacity: 0.9,
-			depthTest: false
+			opacity: 1.0, // Full opacity
+			depthTest: false // Always render on top
 		});
 		const sphere = new THREE.Mesh(sphereGeometry, sphereMaterial);
+		sphere.renderOrder = 3000; // Extremely high render order
 		
-		// Create a pulsing effect
+		// Create a more visible pulsing effect
 		const pulse = gsap.timeline({repeat: -1, yoyo: true});
 		pulse.to(sphere.scale, {
-			x: 1.2,
-			y: 1.2,
-			z: 1.2,
-			duration: 1,
+			x: 1.3,
+			y: 1.3,
+			z: 1.3,
+			duration: 0.8, // Faster pulse
 			ease: "sine.inOut"
 		});
 		
 		// Add a plus sign to indicate expand functionality
 		const createPlusSegment = (isHorizontal) => {
-			const width = isHorizontal ? 0.8 : 0.2;
-			const height = isHorizontal ? 0.2 : 0.8;
+			const width = isHorizontal ? 1.0 : 0.25; // Larger segments
+			const height = isHorizontal ? 0.25 : 1.0;
 			const geometry = new THREE.BoxGeometry(width, height, 0.1);
 			const material = new THREE.MeshBasicMaterial({
-				color: 0xffffff,
-				depthTest: false
+				color: 0xffffff, // White
+				depthTest: false,
+				transparent: true,
+				opacity: 1.0
 			});
 			const segment = new THREE.Mesh(geometry, material);
-			segment.position.z = 0.5; // Position slightly in front of sphere
+			segment.position.z = 0.6; // Position more in front of sphere
+			segment.renderOrder = 3001; // Extremely high render order
 			return segment;
 		};
 		
@@ -1875,14 +2440,26 @@ export class TokenScoreboard {
 		// Add sphere to expand planet group
 		this.expandPlanet.add(sphere);
 		
-		// Set the initial position - will be updated in updateScreenPosition
-		this.expandPlanet.position.set(-5, -4, -10);
+		// Set the initial position - will be updated consistently in _positionExpandPlanetBottomLeft
+		// Position immediately in bottom right (not left!) using helper method if camera is available
+		if (this.camera) {
+			this._positionExpandPlanetBottomRight();
+		} else {
+			// Default fallback position (bottom right)
+			this.expandPlanet.position.set(5, -7, -10);
+			this.expandPlanet.scale.set(0.4, 0.4, 0.4); // Fixed scale
+		}
 		
-		// Set high render order to ensure visibility
-		this.expandPlanet.renderOrder = 1000;
-		sphere.renderOrder = 1001;
-		horizontalSegment.renderOrder = 1002;
-		verticalSegment.renderOrder = 1002;
+		// Set extremely high render order to guarantee visibility
+		this.expandPlanet.renderOrder = 3000;
+		this.expandPlanet.traverse(obj => {
+			if (obj.material) {
+				obj.material.depthTest = false;
+				if (obj.material.transparent) {
+					obj.material.opacity = 1.0;
+				}
+			}
+		});
 		
 		// Add to scene
 		this.scene.add(this.expandPlanet);
@@ -1893,6 +2470,199 @@ export class TokenScoreboard {
 		// Store a reference to the sphere for hit detection
 		this.expandPlanet.userData.expandSphere = sphere;
 		
-		console.log("Created dedicated expand planet for hidden mode");
+		console.log("Created dedicated expand planet for hidden mode, positioned at bottom right");
+	}
+
+	/**
+	 * Position the expandPlanet consistently in the bottom right corner
+	 * Called every frame in hidden mode to ensure consistent positioning
+	 * @private
+	 */
+	_positionExpandPlanetBottomRight() {
+		if (!this.expandPlanet || !this.camera) return;
+		
+		// Get camera orientation vectors to compute bottom right position
+		const fov = this.camera.fov * Math.PI / 180;
+		const distance = 10; // Fixed distance from camera
+		const viewHeight = 2 * Math.tan(fov / 2) * distance;
+		const viewWidth = viewHeight * this.camera.aspect;
+		
+		// Get camera quaternion for orientation
+		const quaternion = this.camera.quaternion.clone();
+		
+		// Create camera-oriented coordinate system
+		const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
+		const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
+		const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
+		
+		// Position the expand planet at the bottom RIGHT of the screen (not left)
+		// Use fixed offsets that won't change with viewWidth/Height to avoid jitter
+		const bottomY = -viewHeight * 0.4; // Lower position - never changes
+		const rightX = viewWidth * 0.4;    // Right side - never changes
+		
+		// Calculate position in 3D space for bottom right
+		const planetPos = this.camera.position.clone()
+			.add(forward.clone().multiplyScalar(distance))
+			.add(right.clone().multiplyScalar(rightX))
+			.add(up.clone().multiplyScalar(bottomY));
+		
+		// Set position for expand planet - with a small fixed offset to ensure stability
+		this.expandPlanet.position.copy(planetPos);
+		
+		// Set rotation to match camera
+		this.expandPlanet.quaternion.copy(quaternion);
+		
+		// Make sure scale is consistent - never changes during animation
+		const scale = 0.4; // Fixed scale - never changes with window size
+		this.expandPlanet.scale.set(scale, scale, scale);
+		
+		// Ensure planet is always visible with high render order and no depth test
+		this.expandPlanet.traverse(obj => {
+			if (obj.material) {
+				obj.material.depthTest = false;
+				obj.renderOrder = 2000;
+				if (obj.material.transparent) {
+					obj.material.opacity = 1.0;
+				}
+			}
+		});
+	}
+
+	/**
+	 * Fix bolt positions directly when animation has issues
+	 * Call this whenever bolts get misplaced during transitions
+	 */
+	fixBoltPositions() {
+		if (!this.cornerBolts || this.cornerBolts.length < 4) return;
+		
+		const halfWidth = this.width / 2;
+		const halfHeight = this.height / 2;
+		
+		// Find bolts by their side property
+		const rightBolts = this.cornerBolts.filter(bolt => bolt.userData.isRightSide);
+		const leftBolts = this.cornerBolts.filter(bolt => !bolt.userData.isRightSide);
+		
+		// Track position changes for animation effects
+		let significantChange = false;
+		
+		// Process top/bottom for both sides
+		rightBolts.forEach(bolt => {
+			// Determine if this is a top or bottom bolt based on current position
+			const isTopBolt = bolt.position.y > 0;
+			const yPos = isTopBolt ? (halfHeight + 0.1) : (-halfHeight - 0.1);
+			
+			// Store original position for comparison
+			const originalX = bolt.position.x;
+			const originalY = bolt.position.y;
+			
+			// Set position explicitly - always on right side
+			bolt.position.set(halfWidth + 0.45, yPos, -1.0);
+			bolt.visible = true;
+			
+			// Check if position changed significantly
+			if (Math.abs(originalX - bolt.position.x) > 0.001 || 
+				Math.abs(originalY - bolt.position.y) > 0.001) {
+				significantChange = true;
+			}
+			
+			// Update plate position if it exists
+			if (bolt.userData.plate) {
+				bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.9);
+				bolt.userData.plate.visible = true;
+			}
+			
+			// Ensure color is set correctly
+			if (bolt.material) {
+				bolt.material.color.set(0xDAA520); // Gold for right
+				bolt.material.emissive.set(0xDAA520);
+			}
+		});
+		
+		leftBolts.forEach(bolt => {
+			// Determine if this is a top or bottom bolt based on current position
+			const isTopBolt = bolt.position.y > 0;
+			const yPos = isTopBolt ? (halfHeight + 0.1) : (-halfHeight - 0.1);
+			
+			// Store original position for comparison
+			const originalX = bolt.position.x;
+			const originalY = bolt.position.y;
+			
+			// Set position explicitly - always on left side
+			bolt.position.set(-halfWidth - 0.45, yPos, -1.0);
+			bolt.visible = true;
+			
+			// Check if position changed significantly
+			if (Math.abs(originalX - bolt.position.x) > 0.001 || 
+				Math.abs(originalY - bolt.position.y) > 0.001) {
+				significantChange = true;
+			}
+			
+			// Update plate position if it exists
+			if (bolt.userData.plate) {
+				bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.9);
+				bolt.userData.plate.visible = true;
+			}
+			
+			// Ensure color is set correctly
+			if (bolt.material) {
+				bolt.material.color.set(0x00ff00); // Green for left
+				bolt.material.emissive.set(0x00ff00);
+			}
+		});
+		
+		// Always force sync jets after bolt positions are fixed
+		if (this.jetsManager) {
+			// Use forced sync when positions were changed significantly
+			this.jetsManager.syncJetsWithBolts(significantChange);
+			
+			// If positions changed significantly and we're not in hidden mode, trigger jet effect
+			if (significantChange && this.sizeMode !== 'hidden') {
+				console.log("Significant bolt position change detected - triggering jet effect");
+				this.triggerJetEffect(0.8); // Increased from 0.7 for more visibility
+				
+				// Additional sync after a short delay to ensure particles follow the bolts
+				setTimeout(() => {
+					if (this.jetsManager) {
+						this.jetsManager.syncJetsWithBolts(true);
+					}
+				}, 50);
+			}
+		}
+		
+		// Log bolt positions for debugging
+		console.log("Bolt positions after fixBoltPositions:");
+		this.cornerBolts.forEach((bolt, i) => {
+			console.log(`Bolt ${i}: x=${bolt.position.x.toFixed(2)}, y=${bolt.position.y.toFixed(2)}, isRightSide=${bolt.userData.isRightSide}, visible=${bolt.visible}`);
+		});
+	}
+
+	/**
+	 * Force a position update after camera movement
+	 * Used when orbit controls stop moving
+	 */
+	updatePositionAfterCameraMovement() {
+		if (this.isAnimatingMode) return;
+		
+		console.log("Updating scoreboard position after camera movement");
+		
+		// Force a full reposition even if not "significant" movement
+		const currentPosition = this.scoreboardGroup.position.clone();
+		
+		// Temporarily reduce movement threshold to ensure update happens
+		const originalThreshold = this.movementThreshold;
+		this.movementThreshold = -1; // Force update by setting threshold negative
+		
+		// Update position
+		this._updateScreenPosition();
+		
+		// Restore original threshold
+		this.movementThreshold = originalThreshold;
+		
+		// Trigger jets effect if position actually changed
+		if (currentPosition.distanceTo(this.scoreboardGroup.position) > 0.01) {
+			if (this.jetsManager && this.sizeMode !== 'hidden') {
+				this.triggerJetEffect(1.0); // Full intensity (was 0.7)
+			}
+		}
 	}
 } 

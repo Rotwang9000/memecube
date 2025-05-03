@@ -12,6 +12,11 @@ export class AnimationManager {
 		this.movementStartQuaternion = new THREE.Quaternion();
 		this.targetQuaternion = new THREE.Quaternion();
 		this.onAnimationComplete = null;
+		
+		// Frame rate control for smoother animations
+		this.lastFrameTime = 0;
+		this.targetFPS = 60;
+		this.frameInterval = 1000 / this.targetFPS;
 	}
 	
 	/**
@@ -23,6 +28,9 @@ export class AnimationManager {
 	 * @param {Function} onComplete - Function to call when animation is complete
 	 */
 	animateMovement(scoreboardGroup, targetPos, targetQuaternion, scale = 0.3, onComplete = null) {
+		// Stop any existing animation
+		this.isMoving = false;
+		
 		// Set flag that we're currently moving
 		this.isMoving = true;
 		this.movementStartTime = performance.now();
@@ -45,9 +53,16 @@ export class AnimationManager {
 		const rotY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
 		this.targetQuaternion.multiply(rotZ).multiply(rotY);
 		
-		// Set up animation
+		// Set up animation with frame rate control
 		const animate = (currentTime) => {
 			if (!this.isMoving) return;
+			
+			// Frame rate control for smoother animations
+			if (currentTime - this.lastFrameTime < this.frameInterval) {
+				requestAnimationFrame(animate);
+				return;
+			}
+			this.lastFrameTime = currentTime;
 			
 			const elapsed = currentTime - this.movementStartTime;
 			const progress = Math.min(elapsed / this.movementDuration, 1);
@@ -84,6 +99,7 @@ export class AnimationManager {
 		};
 		
 		// Start animation
+		this.lastFrameTime = 0; // Reset frame timer
 		requestAnimationFrame(animate);
 		
 		// Return movement direction for jet effects
@@ -107,10 +123,26 @@ export class AnimationManager {
 			return;
 		}
 		
-		const topLeftBolt = cornerBolts[0];
-		const topRightBolt = cornerBolts[1];
-		const bottomLeftBolt = cornerBolts[2]; 
-		const bottomRightBolt = cornerBolts[3];
+		// Find jets if they exist
+		let jetsManager = null;
+		if (cornerBolts[0].parent) {
+			// Try to find jets manager on the scoreboard
+			const scoreboardGroup = cornerBolts[0].parent;
+			if (scoreboardGroup.userData && scoreboardGroup.userData.jetsManager) {
+				jetsManager = scoreboardGroup.userData.jetsManager;
+			}
+		}
+		
+		// Store bolt references by position for clarity
+		// Ensure we're using isRightSide to determine which is which
+		const rightBolts = cornerBolts.filter(bolt => bolt.userData.isRightSide);
+		const leftBolts = cornerBolts.filter(bolt => !bolt.userData.isRightSide);
+		
+		// Find top and bottom bolts for each side based on position
+		const topRightBolt = rightBolts.find(bolt => bolt.position.y > 0) || rightBolts[0];
+		const bottomRightBolt = rightBolts.find(bolt => bolt.position.y <= 0) || rightBolts[1];
+		const topLeftBolt = leftBolts.find(bolt => bolt.position.y > 0) || leftBolts[0];
+		const bottomLeftBolt = leftBolts.find(bolt => bolt.position.y <= 0) || leftBolts[1];
 		
 		// Animation parameters
 		const duration = 800;
@@ -122,21 +154,133 @@ export class AnimationManager {
 		const startPosBottomLeft = bottomLeftBolt.position.clone();
 		const startPosBottomRight = bottomRightBolt.position.clone();
 		
+		// Validate starting positions - ensure left bolts are on left and right bolts are on right
+		// This prevents any incorrect starting positions
+		const halfWidth = (startPosTopRight.x - startPosTopLeft.x) / 2 - 0.45;
+		if (startPosTopRight.x < 0 || startPosBottomRight.x < 0) {
+			console.warn("Correcting right bolt positions - they were on the wrong side");
+			startPosTopRight.x = Math.abs(halfWidth) + 0.45;
+			startPosBottomRight.x = Math.abs(halfWidth) + 0.45;
+		}
+		if (startPosTopLeft.x > 0 || startPosBottomLeft.x > 0) {
+			console.warn("Correcting left bolt positions - they were on the wrong side");
+			startPosTopLeft.x = -Math.abs(halfWidth) - 0.45;
+			startPosBottomLeft.x = -Math.abs(halfWidth) - 0.45;
+		}
+		
 		// Store starting plate positions if they exist
 		const startPosTopLeftPlate = topLeftBolt.userData.plate ? topLeftBolt.userData.plate.position.clone() : null;
 		const startPosTopRightPlate = topRightBolt.userData.plate ? topRightBolt.userData.plate.position.clone() : null;
+		const startPosBottomLeftPlate = bottomLeftBolt.userData.plate ? bottomLeftBolt.userData.plate.position.clone() : null;
+		const startPosBottomRightPlate = bottomRightBolt.userData.plate ? bottomRightBolt.userData.plate.position.clone() : null;
 		
-		// Calculate target positions for top bolts
-		const targetTopLeftPos = isTallMode 
-			? topLeftBolt.userData.targetTallPosition.clone()
-			: topLeftBolt.userData.originalPosition.clone();
+		// Calculate target positions for all bolts
+		let targetTopLeftPos, targetTopRightPos, targetBottomLeftPos, targetBottomRightPos;
 		
-		const targetTopRightPos = isTallMode 
-			? topRightBolt.userData.targetTallPosition.clone()
-			: topRightBolt.userData.originalPosition.clone();
+		if (isTallMode) {
+			// Top bolts - Use targetTallPosition if available
+			if (topLeftBolt.userData.targetTallPosition) {
+				targetTopLeftPos = topLeftBolt.userData.targetTallPosition.clone();
+			} else {
+				console.warn("No targetTallPosition for topLeftBolt, using a default");
+				targetTopLeftPos = startPosTopLeft.clone();
+				targetTopLeftPos.y += 2; // Move up by default
+			}
+			
+			if (topRightBolt.userData.targetTallPosition) {
+				targetTopRightPos = topRightBolt.userData.targetTallPosition.clone();
+			} else {
+				console.warn("No targetTallPosition for topRightBolt, using a default");
+				targetTopRightPos = startPosTopRight.clone();
+				targetTopRightPos.y += 2; // Move up by default
+			}
+			
+			// Bottom bolts - Calculate new positions based on target height
+			// Ensure they maintain their correct left/right sides
+			const halfHeight = targetHeight / 2;
+			
+			// Ensure bottom bolts stay on correct sides
+			targetBottomLeftPos = new THREE.Vector3(
+				startPosBottomLeft.x < 0 ? startPosBottomLeft.x : -Math.abs(halfWidth) - 0.45, 
+				-halfHeight - 0.1,
+				startPosBottomLeft.z
+			);
+			
+			targetBottomRightPos = new THREE.Vector3(
+				startPosBottomRight.x > 0 ? startPosBottomRight.x : Math.abs(halfWidth) + 0.45,
+				-halfHeight - 0.1,
+				startPosBottomRight.z
+			);
+			
+			// Validate target positions - ensure X coordinates maintain left/right sides
+			if (targetTopLeftPos.x > 0) targetTopLeftPos.x = -Math.abs(targetTopLeftPos.x);
+			if (targetBottomLeftPos.x > 0) targetBottomLeftPos.x = -Math.abs(targetBottomLeftPos.x);
+			if (targetTopRightPos.x < 0) targetTopRightPos.x = Math.abs(targetTopRightPos.x);
+			if (targetBottomRightPos.x < 0) targetBottomRightPos.x = Math.abs(targetBottomRightPos.x);
+		} else {
+			// Going back to normal mode - use originalPosition property or calculate
+			const halfHeight = targetHeight / 2;
+			
+			// Left side bolts (both top and bottom)
+			if (topLeftBolt.userData.originalPosition) {
+				targetTopLeftPos = topLeftBolt.userData.originalPosition.clone();
+				// Ensure it stays on the left side
+				if (targetTopLeftPos.x > 0) targetTopLeftPos.x = -Math.abs(halfWidth) - 0.45;
+			} else {
+				console.warn("No originalPosition for topLeftBolt, calculating default left position");
+				targetTopLeftPos = new THREE.Vector3(-Math.abs(halfWidth) - 0.45, halfHeight + 0.1, startPosTopLeft.z);
+			}
+			
+			// Calculate bottom left position to match current height
+			targetBottomLeftPos = new THREE.Vector3(
+				startPosBottomLeft.x < 0 ? startPosBottomLeft.x : -Math.abs(halfWidth) - 0.45,
+				-halfHeight - 0.1,
+				startPosBottomLeft.z
+			);
+			
+			// Right side bolts (both top and bottom)
+			if (topRightBolt.userData.originalPosition) {
+				targetTopRightPos = topRightBolt.userData.originalPosition.clone();
+				// Ensure it stays on the right side
+				if (targetTopRightPos.x < 0) targetTopRightPos.x = Math.abs(halfWidth) + 0.45;
+			} else {
+				console.warn("No originalPosition for topRightBolt, calculating default right position");
+				targetTopRightPos = new THREE.Vector3(Math.abs(halfWidth) + 0.45, halfHeight + 0.1, startPosTopRight.z);
+			}
+			
+			// Calculate bottom right position to match current height
+			targetBottomRightPos = new THREE.Vector3(
+				startPosBottomRight.x > 0 ? startPosBottomRight.x : Math.abs(halfWidth) + 0.45,
+				-halfHeight - 0.1,
+				startPosBottomRight.z
+			);
+		}
+		
+		// Log animation details for debugging
+		console.log("Starting bolt animation:", 
+			`isTallMode=${isTallMode}, startHeight=${startHeight}, targetHeight=${targetHeight}`);
+		console.log("Target positions:", 
+			`topLeft=(${targetTopLeftPos.x.toFixed(2)}, ${targetTopLeftPos.y.toFixed(2)})`,
+			`topRight=(${targetTopRightPos.x.toFixed(2)}, ${targetTopRightPos.y.toFixed(2)})`,
+			`bottomLeft=(${targetBottomLeftPos.x.toFixed(2)}, ${targetBottomLeftPos.y.toFixed(2)})`, 
+			`bottomRight=(${targetBottomRightPos.x.toFixed(2)}, ${targetBottomRightPos.y.toFixed(2)})`);
+		
+		// Frame rate control
+		let lastFrameTime = 0;
+		const frameInterval = 1000 / 60; // Target 60fps
+		
+		// Track elapsed time for jet effects
+		let lastJetTime = 0;
 		
 		// Animation function
 		const animate = (timestamp) => {
+			// Frame rate control for smoother animations
+			if (timestamp - lastFrameTime < frameInterval) {
+				requestAnimationFrame(animate);
+				return;
+			}
+			lastFrameTime = timestamp;
+			
 			const elapsed = timestamp - startTime;
 			const progress = Math.min(elapsed / duration, 1);
 			const easedProgress = easeInOutQuad(progress);
@@ -149,22 +293,65 @@ export class AnimationManager {
 				onUpdate(newHeight, easedProgress);
 			}
 			
-			// Animate top bolts
+			// Animate all bolts while preserving their side (left/right)
 			topLeftBolt.position.lerpVectors(startPosTopLeft, targetTopLeftPos, easedProgress);
 			topRightBolt.position.lerpVectors(startPosTopRight, targetTopRightPos, easedProgress);
+			bottomLeftBolt.position.lerpVectors(startPosBottomLeft, targetBottomLeftPos, easedProgress);
+			bottomRightBolt.position.lerpVectors(startPosBottomRight, targetBottomRightPos, easedProgress);
 			
-			// Animate decorative plates if they exist
+			// Animate all decorative plates if they exist
 			if (topLeftBolt.userData.plate && startPosTopLeftPlate) {
-				// Calculate offset relative to bolt position - the plate is always slightly behind the bolt
-				const plateOffset = new THREE.Vector3(0, 0, -0.1);
+				const plateOffset = new THREE.Vector3(0, 0, 0.1);
 				const targetPlatePos = targetTopLeftPos.clone().add(plateOffset);
 				topLeftBolt.userData.plate.position.lerpVectors(startPosTopLeftPlate, targetPlatePos, easedProgress);
 			}
 			
 			if (topRightBolt.userData.plate && startPosTopRightPlate) {
-				const plateOffset = new THREE.Vector3(0, 0, -0.1);
+				const plateOffset = new THREE.Vector3(0, 0, 0.1);
 				const targetPlatePos = targetTopRightPos.clone().add(plateOffset);
 				topRightBolt.userData.plate.position.lerpVectors(startPosTopRightPlate, targetPlatePos, easedProgress);
+			}
+			
+			if (bottomLeftBolt.userData.plate && startPosBottomLeftPlate) {
+				const plateOffset = new THREE.Vector3(0, 0, 0.1);
+				const targetPlatePos = targetBottomLeftPos.clone().add(plateOffset);
+				bottomLeftBolt.userData.plate.position.lerpVectors(startPosBottomLeftPlate, targetPlatePos, easedProgress);
+			}
+			
+			if (bottomRightBolt.userData.plate && startPosBottomRightPlate) {
+				const plateOffset = new THREE.Vector3(0, 0, 0.1);
+				const targetPlatePos = targetBottomRightPos.clone().add(plateOffset);
+				bottomRightBolt.userData.plate.position.lerpVectors(startPosBottomRightPlate, targetPlatePos, easedProgress);
+			}
+			
+			// Trigger jet effects periodically during animation
+			if (jetsManager) {
+				// Try to emit jet particles every 150ms during animation
+				if (timestamp - lastJetTime > 150) {
+					const intensity = 0.5 + easedProgress * 0.5; // Increase intensity as animation progresses
+					
+					// Create random movement directions for jets
+					const jets = jetsManager.jets || [];
+					jets.forEach((jet, index) => {
+						if (!jet) return;
+						
+						// Create movement direction with random variations
+						const moveDir = new THREE.Vector3(
+							(Math.random() - 0.5) * 0.2,
+							(Math.random() - 0.5) * 0.2,
+							(Math.random() - 0.5) * 0.2 - 0.8 // Mostly backward
+						);
+						
+						// Emit multiple particles for better effect
+						const particleCount = Math.ceil(5 * intensity);
+						for (let i = 0; i < particleCount; i++) {
+							jetsManager.emitJetParticle(jet, moveDir, intensity);
+						}
+					});
+					
+					// Update last jet time
+					lastJetTime = timestamp;
+				}
 			}
 			
 			// Continue animation if not complete
@@ -174,16 +361,53 @@ export class AnimationManager {
 				// Ensure final positions are exactly as intended
 				topLeftBolt.position.copy(targetTopLeftPos);
 				topRightBolt.position.copy(targetTopRightPos);
+				bottomLeftBolt.position.copy(targetBottomLeftPos);
+				bottomRightBolt.position.copy(targetBottomRightPos);
+				
+				// Double-check that bolts maintained their correct sides
+				if (topLeftBolt.position.x > 0 || bottomLeftBolt.position.x > 0) {
+					console.warn("Left bolts ended up on wrong side - fixing");
+					topLeftBolt.position.x = -Math.abs(topLeftBolt.position.x);
+					bottomLeftBolt.position.x = -Math.abs(bottomLeftBolt.position.x);
+				}
+				if (topRightBolt.position.x < 0 || bottomRightBolt.position.x < 0) {
+					console.warn("Right bolts ended up on wrong side - fixing");
+					topRightBolt.position.x = Math.abs(topRightBolt.position.x);
+					bottomRightBolt.position.x = Math.abs(bottomRightBolt.position.x);
+				}
 				
 				// Ensure final positions for plates
 				if (topLeftBolt.userData.plate) {
-					const plateOffset = new THREE.Vector3(0, 0, -0.1);
+					const plateOffset = new THREE.Vector3(0, 0, 0.1);
 					topLeftBolt.userData.plate.position.copy(targetTopLeftPos.clone().add(plateOffset));
 				}
 				
 				if (topRightBolt.userData.plate) {
-					const plateOffset = new THREE.Vector3(0, 0, -0.1);
+					const plateOffset = new THREE.Vector3(0, 0, 0.1);
 					topRightBolt.userData.plate.position.copy(targetTopRightPos.clone().add(plateOffset));
+				}
+				
+				if (bottomLeftBolt.userData.plate) {
+					const plateOffset = new THREE.Vector3(0, 0, 0.1);
+					bottomLeftBolt.userData.plate.position.copy(targetBottomLeftPos.clone().add(plateOffset));
+				}
+				
+				if (bottomRightBolt.userData.plate) {
+					const plateOffset = new THREE.Vector3(0, 0, 0.1);
+					bottomRightBolt.userData.plate.position.copy(targetBottomRightPos.clone().add(plateOffset));
+				}
+				
+				// Final jet burst on completion
+				if (jetsManager) {
+					jetsManager.jets.forEach(jet => {
+						if (!jet) return;
+						
+						// Create backward burst effect
+						const moveDir = new THREE.Vector3(0, 0, -1);
+						for (let i = 0; i < 10; i++) {
+							jetsManager.emitJetParticle(jet, moveDir, 1.0);
+						}
+					});
 				}
 				
 				// Call completion callback
@@ -223,8 +447,19 @@ export class AnimationManager {
 			bolt.userData.plate ? bolt.userData.plate.position.clone() : null
 		);
 		
+		// Frame rate control
+		let lastFrameTime = 0;
+		const frameInterval = 1000 / 60; // Target 60fps
+		
 		// Create animation
 		const animate = (timestamp) => {
+			// Frame rate control for smoother animations
+			if (timestamp - lastFrameTime < frameInterval) {
+				requestAnimationFrame(animate);
+				return;
+			}
+			lastFrameTime = timestamp;
+			
 			const elapsed = timestamp - startTime;
 			const progress = Math.min(elapsed / duration, 1);
 			
@@ -302,8 +537,19 @@ export class AnimationManager {
 			bolt.userData.plate ? bolt.userData.plate.position.clone() : null
 		);
 		
+		// Frame rate control
+		let lastFrameTime = 0;
+		const frameInterval = 1000 / 60; // Target 60fps
+		
 		// Create animation
 		const animate = (timestamp) => {
+			// Frame rate control for smoother animations
+			if (timestamp - lastFrameTime < frameInterval) {
+				requestAnimationFrame(animate);
+				return;
+			}
+			lastFrameTime = timestamp;
+			
 			const elapsed = timestamp - startTime;
 			const progress = Math.min(elapsed / duration, 1);
 			

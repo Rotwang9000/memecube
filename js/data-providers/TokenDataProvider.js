@@ -37,12 +37,27 @@ export class TokenDataProvider {
 	 * Notify all registered callbacks with the updated data
 	 * @param {Array} data The updated data
 	 */
-	notifyCallbacks(data) {
+	async notifyCallbacks(data) {
+		const callbackPromises = [];
+		
 		for (const callback of this.callbacks) {
 			try {
-				callback(data);
+				// Execute the callback and handle it whether sync or async
+				const result = callback(data);
+				if (result instanceof Promise) {
+					callbackPromises.push(result);
+				}
 			} catch (error) {
 				console.error('Error in data update callback:', error);
+			}
+		}
+		
+		// Wait for all promises to settle if there are any async callbacks
+		if (callbackPromises.length > 0) {
+			try {
+				await Promise.allSettled(callbackPromises);
+			} catch (error) {
+				console.error('Error waiting for async callbacks:', error);
 			}
 		}
 	}

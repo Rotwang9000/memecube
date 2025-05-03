@@ -173,38 +173,6 @@ export class TokenVisualizationManager {
 		
 		document.body.appendChild(toggleButton);
 		
-		// Add demo token button
-		const demoButton = document.createElement('button');
-		demoButton.textContent = '🚀 Demo Token';
-		demoButton.style.position = 'absolute';
-		demoButton.style.bottom = '180px';
-		demoButton.style.right = '20px';
-		demoButton.style.zIndex = '1000';
-		
-		demoButton.onclick = async () => {
-			await this.showDemoToken();
-		};
-		
-		document.body.appendChild(demoButton);
-		
-		// Add token refresh button
-		const refreshButton = document.createElement('button');
-		refreshButton.textContent = '🔄 Refresh Tokens';
-		refreshButton.style.position = 'absolute';
-		refreshButton.style.bottom = '220px';
-		refreshButton.style.right = '20px';
-		refreshButton.style.zIndex = '1000';
-		
-		refreshButton.onclick = async () => {
-			// Refresh token data and update cluster
-			if (this.dataProvider) {
-				const tokenData = await this.dataProvider.refreshData();
-				if (this.tokenCluster && tokenData.length > 0) {
-					this.tokenCluster.updateTokens(tokenData);
-					this.utils.showTemporaryMessage(`Updated token cluster with ${tokenData.length} tokens!`);
-				}
-			}
-		};
 		
 		document.body.appendChild(refreshButton);
 	}

@@ -150,13 +150,8 @@ export class ButtonManager {
 			const child = children[i];
 			if (i > 0) { // Skip the planet itself (first child)
 				// Ensure indicator is in front by setting z position and render order
-				if (child.position.z > -1.1) {
-					child.position.z = -1.1; // Set to be in front of planet
-				}
-				
-				if (child.renderOrder < 20) {
+				child.position.z = -1.0; // Set to be in front of planet
 					child.renderOrder = 20; // Higher render order than planet
-				}
 				
 				// Set depthTest to false to ensure visibility
 				if (child.material) {
@@ -166,12 +161,8 @@ export class ButtonManager {
 				// If it's a group (like arrow group), do the same for its children
 				if (child.children && child.children.length > 0) {
 					child.children.forEach(grandchild => {
-						if (grandchild.position.z > -1.1) {
-							grandchild.position.z = -1.1;
-						}
-						if (grandchild.renderOrder < 20) {
+						grandchild.position.z = -1.0;
 							grandchild.renderOrder = 20;
-						}
 						if (grandchild.material) {
 							grandchild.material.depthTest = false;
 						}
@@ -299,23 +290,36 @@ export class ButtonManager {
 		// Simple X shape for Twitter/X
 		const xSize = 0.3; // Increased size
 		
+		// Improved material for visibility
+		const iconMaterial = new THREE.MeshBasicMaterial({ 
+			color: 0x000000, 
+			side: THREE.DoubleSide,
+			depthTest: false,
+			transparent: true,
+			opacity: 1.0
+		});
+		
+		// Z position and render order for visibility
+		const zPos = -0.9; // Clearly in front
+		const renderOrder = 50; // Higher render order
+		
 		// Create thicker X for better visibility
 		const line1 = new THREE.Mesh(
 			new THREE.PlaneGeometry(xSize * 2 * 0.3, xSize * 2), // 50% thicker
-			new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+			iconMaterial
 		);
-		line1.position.z = -1.1; // Ensure icon is in front of planet
+		line1.position.z = zPos;
 		line1.rotation.z = Math.PI / 4;
-		line1.renderOrder = 20; // Much higher render order to be on top
+		line1.renderOrder = renderOrder;
 		buttonGroup.add(line1);
 		
 		const line2 = new THREE.Mesh(
 			new THREE.PlaneGeometry(xSize * 2 * 0.3, xSize * 2), // 50% thicker
-			new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide })
+			iconMaterial
 		);
-		line2.position.z = -1.1; // Ensure icon is in front of planet
+		line2.position.z = zPos;
 		line2.rotation.z = -Math.PI / 4;
-		line2.renderOrder = 20; // Much higher render order to be on top
+		line2.renderOrder = renderOrder;
 		buttonGroup.add(line2);
 	}
 	
@@ -326,34 +330,52 @@ export class ButtonManager {
 		// Simplified Discord logo (D shape)
 		const logoGroup = new THREE.Group();
 		
+		// Z position and render order for visibility
+		const zPos = -0.9; // Clearly in front
+		const renderOrder = 50; // Higher render order
+		
+		// Improved material for visibility
+		const iconMaterial = new THREE.MeshBasicMaterial({ 
+			color, 
+			side: THREE.DoubleSide,
+			depthTest: false,
+			transparent: true,
+			opacity: 1.0
+		});
+		
 		// Create a Circle for the rounded part of the D
 		const circleGeometry = new THREE.CircleGeometry(0.22, 16);
-		const circleMaterial = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
-		const circle = new THREE.Mesh(circleGeometry, circleMaterial);
-		circle.position.set(0.05, 0, -1.1); // Move to front
-		circle.renderOrder = 20; // Higher render order
+		const circle = new THREE.Mesh(circleGeometry, iconMaterial);
+		circle.position.set(0.05, 0, zPos);
+		circle.renderOrder = renderOrder;
 		logoGroup.add(circle);
 		
 		// Create a rectangle for the vertical part
 		const rectGeometry = new THREE.PlaneGeometry(0.08, 0.44);
-		const rectMaterial = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
-		const rect = new THREE.Mesh(rectGeometry, rectMaterial);
-		rect.position.set(-0.15, 0, -1.1); // Move to front
-		rect.renderOrder = 20; // Higher render order
+		const rect = new THREE.Mesh(rectGeometry, iconMaterial);
+		rect.position.set(-0.15, 0, zPos);
+		rect.renderOrder = renderOrder;
 		logoGroup.add(rect);
 		
 		// Small detail cutout for discord logo (eyes)
 		const detailGeometry = new THREE.CircleGeometry(0.12, 16);
 		const detailMaterial = new THREE.MeshBasicMaterial({ 
 			color: buttonGroup.children[0]?.material?.color || 0x5865F2, 
-			side: THREE.DoubleSide
+			side: THREE.DoubleSide,
+			depthTest: false,
+			transparent: true,
+			opacity: 1.0
 		});
 		
 		const detail = new THREE.Mesh(detailGeometry, detailMaterial);
-		detail.position.set(0.05, 0, -1.05); // Slightly behind the main circle
+		detail.position.set(0.05, 0, zPos + 0.01); // Slightly behind the main circle
 		detail.scale.set(0.8, 0.8, 1); // Scale to make it smaller
-		detail.renderOrder = 19; // Just below the main shape
+		detail.renderOrder = renderOrder - 1; // Just below the main shape
 		logoGroup.add(detail);
+		
+		// Position the entire logo group to be in front of the planet
+		logoGroup.position.z = zPos;
+		logoGroup.renderOrder = renderOrder;
 		
 		// Add the logo group to the button
 		buttonGroup.add(logoGroup);
@@ -366,23 +388,35 @@ export class ButtonManager {
 		// Create a simple chain link icon
 		const chainGroup = new THREE.Group();
 		
+		// Z position and render order for visibility
+		const zPos = -0.9; // Clearly in front
+		const renderOrder = 50; // Higher render order
+		
+		// Improved material for visibility
+		const linkMaterial = new THREE.MeshBasicMaterial({ 
+			color, 
+			side: THREE.DoubleSide,
+			depthTest: false,
+			transparent: true,
+			opacity: 1.0
+		});
+		
 		// Create first link (circle with gap)
 		const link1 = new THREE.RingGeometry(0.15, 0.22, 16, 1, 0, Math.PI * 1.4);
-		const linkMaterial = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
 		const linkMesh1 = new THREE.Mesh(link1, linkMaterial);
-		linkMesh1.position.z = -1.1; // Move to front
+		linkMesh1.position.z = zPos;
 		linkMesh1.position.x = -0.1;
 		linkMesh1.rotation.z = Math.PI / 4;
-		linkMesh1.renderOrder = 20; // Higher render order
+		linkMesh1.renderOrder = renderOrder;
 		chainGroup.add(linkMesh1);
 		
 		// Create second link (circle with gap)
 		const link2 = new THREE.RingGeometry(0.15, 0.22, 16, 1, 0, Math.PI * 1.4);
 		const linkMesh2 = new THREE.Mesh(link2, linkMaterial);
-		linkMesh2.position.z = -1.1; // Move to front
+		linkMesh2.position.z = zPos;
 		linkMesh2.position.x = 0.1;
 		linkMesh2.rotation.z = -Math.PI / 4;
-		linkMesh2.renderOrder = 20; // Higher render order
+		linkMesh2.renderOrder = renderOrder;
 		chainGroup.add(linkMesh2);
 		
 		// Add straight connecting lines
@@ -390,17 +424,21 @@ export class ButtonManager {
 			new THREE.PlaneGeometry(0.1, 0.05),
 			linkMaterial
 		);
-		line1.position.set(-0.05, 0.1, -1.1); // Move to front
-		line1.renderOrder = 20; // Higher render order
+		line1.position.set(-0.05, 0.1, zPos);
+		line1.renderOrder = renderOrder;
 		chainGroup.add(line1);
 		
 		const line2 = new THREE.Mesh(
 			new THREE.PlaneGeometry(0.1, 0.05),
 			linkMaterial
 		);
-		line2.position.set(-0.05, -0.1, -1.1); // Move to front
-		line2.renderOrder = 20; // Higher render order
+		line2.position.set(-0.05, -0.1, zPos);
+		line2.renderOrder = renderOrder;
 		chainGroup.add(line2);
+		
+		// Position the entire chain group to be in front of the planet
+		chainGroup.position.z = zPos;
+		chainGroup.renderOrder = renderOrder;
 		
 		// Add the link icon to the button
 		buttonGroup.add(chainGroup);
@@ -410,69 +448,66 @@ export class ButtonManager {
 	 * Create arrow indicator for buttons
 	 */
 	createArrowIndicator(buttonGroup, direction, color) {
-		// Create a simple arrow shape
+		// Create a simple arrow shape (just the arrowhead, no stalk)
 		const arrowGroup = new THREE.Group();
 		
 		// Common parameters for improved visibility
-		const arrowWidth = 1.2;  // Increased from 0.5
-		const arrowHeight = 1.2; // Increased from 0.5
-		const lineWidth = 0.15;  // Increased from 0.08
+		const arrowWidth = 0.4;  // Width of the arrow head
+		const arrowHeight = 0.4; // Height of the arrow head
 		
 		// Create base rendering parameters
 		const arrowMaterial = new THREE.MeshBasicMaterial({ 
 			color: color,
-			side: THREE.DoubleSide
+			side: THREE.DoubleSide,
+			depthTest: false,
+			transparent: true,
+			opacity: 1.0
 		});
 		
 		// Position for arrow components
-		const zPos = -1.1; // Adjusted to be in front of planet
-		const renderOrder = 20; // Same render order as other icons
+		const zPos = -0.8; // Adjusted to be clearly in front of planet
+		const renderOrder = 100; // Even higher render order to absolutely ensure visibility
 		
 		if (direction === 'up') {
-			// Up arrow - triangle at top with stem
+			// Up arrow - just the triangle pointing upward
 			const triangleShape = new THREE.Shape();
-			triangleShape.moveTo(-arrowWidth/2, -arrowHeight*0.2);
-			triangleShape.lineTo(0, -arrowHeight*0.5);
-			triangleShape.lineTo(arrowWidth/2, -arrowHeight*0.2);
-			triangleShape.lineTo(-arrowWidth/2, -arrowHeight*0.2);
+			triangleShape.moveTo(-arrowWidth/2, arrowHeight/2);
+			triangleShape.lineTo(0, -arrowHeight/2);
+			triangleShape.lineTo(arrowWidth/2, arrowHeight/2);
+			triangleShape.lineTo(-arrowWidth/2, arrowHeight/2);
 			
 			const triangleGeometry = new THREE.ShapeGeometry(triangleShape);
 			const triangleMesh = new THREE.Mesh(triangleGeometry, arrowMaterial);
 			triangleMesh.position.z = zPos;
-			triangleMesh.position.y = 0.2; // Move up slightly to centralise
-			triangleMesh.position.x = 0.1; // Slight adjustment to the right for better centering
 			triangleMesh.renderOrder = renderOrder;
 			arrowGroup.add(triangleMesh);
-			
-			// Stem
-			const stemGeometry = new THREE.PlaneGeometry(lineWidth, arrowHeight*0.65);
-			const stemMesh = new THREE.Mesh(stemGeometry, arrowMaterial);
-			stemMesh.position.set(0.1, arrowHeight*0.5, zPos); // Adjusted to move up and slight right
-			stemMesh.renderOrder = renderOrder;
-			arrowGroup.add(stemMesh);
-		} else {
-			// Down arrow - triangle at bottom with stem
+		} else if (direction === 'down') {
+			// Down arrow - just the triangle pointing downward
 			const triangleShape = new THREE.Shape();
-			triangleShape.moveTo(-arrowWidth/2, arrowHeight*0.2);
-			triangleShape.lineTo(0, arrowHeight*0.5);
-			triangleShape.lineTo(arrowWidth/2, arrowHeight*0.2);
-			triangleShape.lineTo(-arrowWidth/2, arrowHeight*0.2);
+			triangleShape.moveTo(-arrowWidth/2, -arrowHeight/2);
+			triangleShape.lineTo(0, arrowHeight/2);
+			triangleShape.lineTo(arrowWidth/2, -arrowHeight/2);
+			triangleShape.lineTo(-arrowWidth/2, -arrowHeight/2);
 			
 			const triangleGeometry = new THREE.ShapeGeometry(triangleShape);
 			const triangleMesh = new THREE.Mesh(triangleGeometry, arrowMaterial);
 			triangleMesh.position.z = zPos;
-			triangleMesh.position.y = -0.2; // Move down slightly to centralise
-			triangleMesh.position.x = 0.1; // Slight adjustment to the right for better centering
 			triangleMesh.renderOrder = renderOrder;
 			arrowGroup.add(triangleMesh);
-			
-			// Stem
-			const stemGeometry = new THREE.PlaneGeometry(lineWidth, arrowHeight*0.65);
-			const stemMesh = new THREE.Mesh(stemGeometry, arrowMaterial);
-			stemMesh.position.set(0.1, -arrowHeight*0.5, zPos); // Adjusted to move down and slight right
-			stemMesh.renderOrder = renderOrder;
-			arrowGroup.add(stemMesh);
 		}
+		
+		// Position the entire arrow group to be in front of the planet
+		arrowGroup.position.z = -0.8;
+		arrowGroup.renderOrder = renderOrder;
+		
+		// Set arrow group material properties for visibility
+		arrowGroup.traverse(obj => {
+			if (obj.material) {
+				obj.material.depthTest = false;
+				obj.material.transparent = true;
+				obj.material.opacity = 1.0;
+			}
+		});
 		
 		buttonGroup.add(arrowGroup);
 	}
@@ -489,13 +524,16 @@ export class ButtonManager {
 		const lineWidth = 0.2; // Increased from 0.1
 		
 		// Position for X components
-		const zPos = -1.1; // Same z-position as other icons
-		const renderOrder = 20; // Same render order as other icons
+		const zPos = -0.9; // Improved z-position to be clearly in front
+		const renderOrder = 50; // Higher render order to ensure visibility
 		
 		// Material
 		const xMaterial = new THREE.MeshBasicMaterial({ 
 			color: color,
-			side: THREE.DoubleSide 
+			side: THREE.DoubleSide,
+			depthTest: false,
+			transparent: true,
+			opacity: 1.0
 		});
 		
 		// First diagonal line (top-left to bottom-right)
@@ -514,6 +552,10 @@ export class ButtonManager {
 		line2.renderOrder = renderOrder;
 		xGroup.add(line2);
 		
+		// Position the entire X group to be in front of the planet
+		xGroup.position.z = -0.9;
+		xGroup.renderOrder = renderOrder;
+		
 		buttonGroup.add(xGroup);
 	}
 	
@@ -529,33 +571,39 @@ export class ButtonManager {
 		
 		// Ensure buttons are always positioned outside the scoreboard area
 		const topOffset = 2.0; // Increased distance above the scoreboard
-		const buttonSpacing = 1.5; // Space between buttons
+		const buttonSpacing = 3.0; // Increased space between buttons for better visibility
 		const socialButtonSpacing = 1.5; // Increased from 1.0
 		
 		// Set Z to be always in front
-		const buttonZ = 1.0; // Increased z-value to ensure visibility
+		const buttonZ = -1.0; // Negative Z to bring buttons forward
 		
 		if (sizeMode === 'hidden') {
-			// In hidden mode, position buttons more prominently since they're all that's visible
-			// Position expand button prominently in view
+			// In hidden mode, position buttons at the bottom, next to each other
+			// Position expand button to the left of collapse button
+			const bottomY = -7.0; // Fixed position at the bottom of the screen
+			
 			this.expandButton.position.set(
-				2.0,     // Centered horizontally
-				-1.0,    // Slightly below center
-				-1.0     // In front of other elements
+				-1.5,   // Left position
+				bottomY, // Fixed bottom position
+				-1.0    // In front of other elements
 			);
 			
-			// Position collapse button nearby but distinct
+			// Position collapse button right next to expand button
 			this.collapseButton.position.set(
-				0.0,     // Centered horizontally
-				-1.0,    // Same level as expand
-				-1.0     // In front
+				1.5,    // Right position
+				bottomY, // Same bottom position
+				-1.0    // In front
 			);
 			
-			// Position URL button as a visible planet
+			// Position URL button as a visible planet nearby
 			if (this.urlButton) {
-				this.urlButton.position.set(4.0, -1.0, -1.0);
+				this.urlButton.position.set(4.0, bottomY, -1.0);
 				this.urlButton.visible = true;
 			}
+			
+			// CRITICAL: Force all buttons to be visible in hidden mode
+			this.expandButton.visible = true;
+			this.collapseButton.visible = true;
 			
 			// CRITICAL: Make buttons more visible in hidden mode by adjusting materials
 			[this.expandButton, this.collapseButton, this.urlButton].forEach(button => {
@@ -564,33 +612,56 @@ export class ButtonManager {
 					if (obj.material) {
 						obj.material.depthTest = false;
 						obj.renderOrder = 100;
+						// Ensure opacity is set to fully visible
+						if (obj.material.transparent) {
+							obj.material.opacity = 1.0;
+						}
 					}
 				});
 			});
 			
-			// CRITICAL: ALWAYS keep both buttons visible in hidden mode
-			this.expandButton.visible = true;
-			this.collapseButton.visible = true;
+			// CRITICAL: Ensure the arrows are properly positioned in front of planets
+			this.ensureButtonIndicatorsAreFrontal(this.expandButton);
+			this.ensureButtonIndicatorsAreFrontal(this.collapseButton);
 			
-			console.log("Hidden mode: Buttons positioned prominently");
+			console.log("Hidden mode: Buttons positioned at bottom, next to each other");
 		} else {
-			// Position expand/collapse at top corners, clearly above the scoreboard
+			// Position expand/collapse at top left and right for clarity
 			const topY = height/2 + topOffset;
-			this.expandButton.position.set(-width/2 - buttonSpacing, topY, buttonZ);
-			this.collapseButton.position.set(-width/2 + buttonSpacing, topY, buttonZ);
 			
-			// Ensure buttons are visible
-			this.expandButton.visible = true;
-			this.collapseButton.visible = true;
+			// Put expand button at top left, clearly visible
+			this.expandButton.position.set(-width/2 - 2, topY, buttonZ);
 			
-			console.log(`Normal/tall mode: Buttons positioned at y=${topY}`);
+			// Put collapse button at top right, clearly visible
+			this.collapseButton.position.set(width/2 + 2, topY, buttonZ);
+			
+			// Ensure buttons are visible and depth settings are correct
+			[this.expandButton, this.collapseButton].forEach(button => {
+				if (!button) return;
+				
+				button.visible = true;
+				console.log(`Setting ${button.userData?.action} button to visible`);
+				
+				// Make sure all materials are set for visibility
+				button.traverse(obj => {
+					if (obj.material) {
+						obj.material.depthTest = false;
+						obj.renderOrder = 100;
+					}
+				});
+			});
+			
+			// Ensure arrows are visible
+			this.ensureButtonIndicatorsAreFrontal(this.expandButton);
+			this.ensureButtonIndicatorsAreFrontal(this.collapseButton);
+			
+			console.log(`Normal/tall mode: Buttons positioned at top left/right at y=${topY}`);
 		}
 		
 		// Always position exit button at top right corner
 		this.exitButton.position.set(width/2, height/2 + topOffset, buttonZ);
 		
-		// Position social media buttons at the bottom center
-		// IMPORTANT: Only visible in detail mode or when socialVisible is true
+		// Position social media buttons at the bottom 
 		if (this.socialButtons.length > 0) {
 			const totalWidth = (this.socialButtons.length - 1) * socialButtonSpacing;
 			const startX = -totalWidth / 2;
@@ -599,11 +670,17 @@ export class ButtonManager {
 			this.socialButtons.forEach((button, index) => {
 				if (sizeMode === 'hidden') {
 					// In hidden mode, position social buttons in a horizontal line near the main buttons
+					// Position them lower than the main buttons
+					const bottomY = -9.0; // Even lower than the main buttons
+					
 					button.position.set(
-						-4.0 + index * socialButtonSpacing * 1.5, // Spread out more
-						-3.0, // Below main buttons
-						-1.0  // In front
+						-3.0 + index * socialButtonSpacing * 1.5, // Spread out more
+						bottomY, // Lower position
+						-1.0    // In front
 					);
+					
+					// Always visible in hidden mode
+					button.visible = true;
 				} else {
 					// Normal positioning for other modes
 					button.position.set(
@@ -611,36 +688,41 @@ export class ButtonManager {
 						-height/2 - topOffset, // Below scoreboard
 						buttonZ
 					);
+					
+					// In normal modes, visibility depends on socialVisible flag
+					button.visible = this.socialVisible;
 				}
-				
-				// Make visible based on socialVisible flag
-				button.visible = this.socialVisible || sizeMode === 'hidden';
 				
 				// Ensure material opacity is correct
 				if (button.visible) {
 					button.traverse(obj => {
-						if (obj.material && obj.material.opacity !== undefined) {
-							obj.material.opacity = 0.9;
-							
-							// In hidden mode, make sure materials are visible
+						if (obj.material) {
+							// In hidden mode, make sure materials are fully visible
 							if (sizeMode === 'hidden') {
 								obj.material.depthTest = false;
 								obj.renderOrder = 100;
+								if (obj.material.transparent) {
+									obj.material.opacity = 1.0;
+								}
+							} else {
+								if (obj.material.transparent) {
+									obj.material.opacity = 0.9;
+								}
 							}
 						}
 					});
 				}
 			});
 			
-			console.log(`Social buttons positioned: visible=${this.socialVisible}`);
+			console.log(`Social buttons positioned: visible=${this.socialVisible || sizeMode === 'hidden'}`);
 		}
 		
 		// Double check positions are valid
 		console.log(`Button positions after update:
-			- Expand: ${JSON.stringify(this.expandButton.position.toArray())}
-			- Collapse: ${JSON.stringify(this.collapseButton.position.toArray())}
-			- Exit: ${JSON.stringify(this.exitButton.position.toArray())}
-			- Socials visible: ${this.socialVisible}
+			- Expand: ${JSON.stringify(this.expandButton.position.toArray())} visible=${this.expandButton.visible}
+			- Collapse: ${JSON.stringify(this.collapseButton.position.toArray())} visible=${this.collapseButton.visible}
+			- Exit: ${JSON.stringify(this.exitButton.position.toArray())} visible=${this.exitButton.visible}
+			- Socials visible: ${this.socialVisible || sizeMode === 'hidden'}
 		`);
 		
 		// If we have a buttons group, make sure it's positioned appropriately 
@@ -654,6 +736,9 @@ export class ButtonManager {
 					if (obj.material) {
 						obj.material.depthTest = false;
 						obj.renderOrder = 100;
+						if (obj.material.transparent) {
+							obj.material.opacity = 1.0;
+						}
 					}
 				});
 			}
@@ -677,6 +762,8 @@ export class ButtonManager {
 	 * @param {string} sizeMode - Current size mode ('normal', 'tall', 'hidden')
 	 */
 	updateButtonColors(sizeMode) {
+		console.log(`Updating button colors for mode: ${sizeMode}`);
+		
 		if (sizeMode === 'tall') {
 			// Grey out up arrow as we're fully expanded
 			this.expandPlanetMaterial.color.setHex(0x555555);
@@ -687,8 +774,32 @@ export class ButtonManager {
 			this.collapsePlanetMaterial.color.setHex(0xaa0000);
 		} else if (sizeMode === 'hidden') {
 			// Grey out down arrow as we're fully hidden
-			this.expandPlanetMaterial.color.setHex(0x00aa00); // Active up arrow
-			this.collapsePlanetMaterial.color.setHex(0x555555);
+			this.expandPlanetMaterial.color.setHex(0x00aa00); // Active up arrow (bright green)
+			this.collapsePlanetMaterial.color.setHex(0x555555); // Inactive down arrow (grey)
+			
+			// CRITICAL: Make sure the expand button is fully visible with bright color
+			if (this.expandButton) {
+				this.expandButton.visible = true;
+				
+				// Make all children visible and ensure material opacity
+				this.expandButton.traverse(obj => {
+					if (obj.material) {
+						obj.material.depthTest = false;
+						obj.renderOrder = 100;
+						if (obj.material.transparent) {
+							obj.material.opacity = 1.0;
+						}
+					}
+				});
+			}
+		}
+		
+		// Double check button visibility
+		if (this.expandButton && this.collapseButton) {
+			console.log(`After color update: 
+				- Expand visible: ${this.expandButton.visible}, color: ${this.expandPlanetMaterial.color.getHexString()}
+				- Collapse visible: ${this.collapseButton.visible}, color: ${this.collapsePlanetMaterial.color.getHexString()}
+			`);
 		}
 	}
 	
@@ -790,12 +901,17 @@ export class ButtonManager {
 				if (btn.visible) {
 					btn.traverse(obj => {
 						if (obj.material) {
-							obj.material.opacity = 0.9;
-							
-							// In hidden mode, ensure materials are always visible
+							// In hidden mode, ensure materials are always fully visible
 							if (isHiddenMode) {
 								obj.material.depthTest = false;
 								obj.renderOrder = 100;
+								if (obj.material.transparent) {
+									obj.material.opacity = 1.0;
+								}
+							} else {
+								if (obj.material.transparent) {
+									obj.material.opacity = 0.9;
+								}
 							}
 						}
 					});
@@ -803,7 +919,7 @@ export class ButtonManager {
 			}
 		});
 		
-		console.log(`Social buttons visibility set to ${visible}, hidden mode: ${isHiddenMode}`);
+		console.log(`Social buttons visibility set to ${visible}, hidden mode: ${isHiddenMode}, actual visibility: ${isHiddenMode || visible}`);
 	}
 	
 	/**

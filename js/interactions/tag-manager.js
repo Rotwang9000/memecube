@@ -96,10 +96,16 @@ export class TagManager {
 	loadFont() {
 		const loader = new FontLoader();
 		
+		console.log(`Attempting to load font from: ${this.options.fontPath}`);
+		
 		loader.load(this.options.fontPath, (font) => {
 			this.tagStyle.font = font;
 			this.fontLoaded = true;
-			console.log('Font loaded successfully');
+			console.log('Font loaded successfully', {
+				fontPath: this.options.fontPath,
+				fontAvailable: !!this.tagStyle.font,
+				fontLoaded: this.fontLoaded
+			});
 		}, 
 		// Progress
 		(xhr) => {
@@ -108,6 +114,26 @@ export class TagManager {
 		// Error
 		(error) => {
 			console.error('Error loading font:', error);
+			console.error(`Font path was: ${this.options.fontPath}`);
+			// Try a fallback font
+			this.tryFallbackFont();
+		});
+	}
+	
+	/**
+	 * Try loading a fallback font if the main one fails
+	 */
+	tryFallbackFont() {
+		console.log('Trying fallback font: helvetiker_bold.typeface.json');
+		const loader = new FontLoader();
+		
+		loader.load('/fonts/helvetiker_bold.typeface.json', (font) => {
+			this.tagStyle.font = font;
+			this.fontLoaded = true;
+			console.log('Fallback font loaded successfully');
+		}, null, (error) => {
+			console.error('Error loading fallback font:', error);
+			console.error('CRITICAL: No fonts could be loaded - tag creation will fail');
 		});
 	}
 	
@@ -148,13 +174,27 @@ export class TagManager {
 	createTag(name, url, options = {}, tokenData = null) {
 		// Wait for font to load
 		if (!this.fontLoaded) {
-			console.warn('Font not loaded, cannot create tag');
+			console.warn('Font not loaded, cannot create tag for:', name);
+			return null;
+		}
+
+		if(!options.source) {
+			console.warn('No source provided for tag:', name);
 			return null;
 		}
 		
+		// Check for tag font
+		if (!this.tagStyle.font) {
+			console.error('Font object missing even though font is marked as loaded!');
+			console.error('Will attempt to reload font');
+			// Try to reload the font
+			this.loadFont();
+			return null;
+		}
+
 		// Ensure name is a string
 		if (typeof name !== 'string') {
-			console.error('Tag name must be a string');
+			console.error('Tag name must be a string, received:', typeof name);
 			return null;
 		}
 		
@@ -180,99 +220,112 @@ export class TagManager {
 		};
 		
 		// Create geometry for the tag
-		const geometry = new TextGeometry(displayName, {
-			font: this.tagStyle.font,
-			size: tagOptions.size,
-			height: tagOptions.depth,
-			curveSegments: tagOptions.curveSegments,
-			bevelEnabled: tagOptions.bevelEnabled,
-			bevelThickness: tagOptions.bevelThickness,
-			bevelSize: tagOptions.bevelSize,
-			bevelSegments: tagOptions.bevelSegments
-		});
-		
-		// Center geometry
-		geometry.computeBoundingBox();
-		const centerOffset = new THREE.Vector3();
-		geometry.boundingBox.getCenter(centerOffset);
-		centerOffset.multiplyScalar(-1);
-		
-		geometry.translate(centerOffset.x, centerOffset.y, centerOffset.z);
-		
-		// Create material with slight random color variation for visual interest
-		const colorVariance = this.options.colorVariance;
-		const color = new THREE.Color(this.options.defaultColor);
-		
-		// Apply slight random variation to color
-		color.r += (Math.random() * 2 - 1) * colorVariance;
-		color.g += (Math.random() * 2 - 1) * colorVariance;
-		color.b += (Math.random() * 2 - 1) * colorVariance;
-		
-		// Clamp values
-		color.r = Math.max(0, Math.min(1, color.r));
-		color.g = Math.max(0, Math.min(1, color.g));
-		color.b = Math.max(0, Math.min(1, color.b));
-		
-		// Create material with physically based rendering
-		const material = new THREE.MeshStandardMaterial({
-			color: options.color ? new THREE.Color(options.color) : color,
-			metalness: 0.9,  // Increased metalness for Borg-like appearance
-			roughness: 0.1,   // Reduced roughness for a polished look
-		});
-		
-		// Create mesh
-		const mesh = new THREE.Mesh(geometry, material);
-		
-		// Set scale
-		const scale = options.scale || 1.0;
-		mesh.scale.set(scale, scale, scale);
-		
-		// Add to scene
-		this.scene.add(mesh);
-		
-		// Create tag object
-		const tag = {
-			id,
-			name: displayName,
-			originalName: name,
-			url: url || '#',
-			mesh,
-			color: options.color ? new THREE.Color(options.color) : color.clone(),
-			createdAt: Date.now(),
-			options,
-			tokenData, // Store token data for scoreboard display
-			metadata: {
-				isToken: !!tokenData,
-				addedAt: Date.now(),
-				source: options.source || 'manual',
-			}
-		};
-		
-		console.log(`Created tag with ID: ${id}, name: ${displayName}, hasTokenData: ${!!tokenData}`);
-		
-		// Add to collections
-		this.tags.push(tag);
-		this.tagsByName.set(displayName, tag);
-		
-		// Add to physics system (place tag in space)
-		const success = this.physics.addNewTag(tag, this.tags);
-		
-		if (!success) {
-			console.warn(`Failed to place tag "${name}" in space`);
-			// Remove from scene if physics placement failed
-			this.scene.remove(mesh);
+		try {
+			const geometry = new TextGeometry(displayName, {
+				font: this.tagStyle.font,
+				size: tagOptions.size,
+				height: tagOptions.depth,
+				curveSegments: tagOptions.curveSegments,
+				bevelEnabled: tagOptions.bevelEnabled,
+				bevelThickness: tagOptions.bevelThickness,
+				bevelSize: tagOptions.bevelSize,
+				bevelSegments: tagOptions.bevelSegments
+			});
 			
-			// Remove from collections
-			const index = this.tags.findIndex(t => t.id === tag.id);
-			if (index !== -1) {
-				this.tags.splice(index, 1);
-			}
-			this.tagsByName.delete(displayName);
+			// Center geometry
+			geometry.computeBoundingBox();
+			const centerOffset = new THREE.Vector3();
+			geometry.boundingBox.getCenter(centerOffset);
+			centerOffset.multiplyScalar(-1);
 			
+			geometry.translate(centerOffset.x, centerOffset.y, centerOffset.z);
+			
+			// Create material with slight random color variation for visual interest
+			const colorVariance = this.options.colorVariance;
+			const color = new THREE.Color(this.options.defaultColor);
+			
+			// Apply slight random variation to color
+			color.r += (Math.random() * 2 - 1) * colorVariance;
+			color.g += (Math.random() * 2 - 1) * colorVariance;
+			color.b += (Math.random() * 2 - 1) * colorVariance;
+			
+			// Clamp values
+			color.r = Math.max(0, Math.min(1, color.r));
+			color.g = Math.max(0, Math.min(1, color.g));
+			color.b = Math.max(0, Math.min(1, color.b));
+			
+			// Create material with physically based rendering
+			const material = new THREE.MeshStandardMaterial({
+				color: options.color ? new THREE.Color(options.color) : color,
+				metalness: 0.9,  // Increased metalness for Borg-like appearance
+				roughness: 0.1,   // Reduced roughness for a polished look
+			});
+			
+			// Create mesh
+			const mesh = new THREE.Mesh(geometry, material);
+			
+			// Set scale
+			const scale = options.scale || 1.0;
+			mesh.scale.set(scale, scale, scale);
+			
+			// Add to scene
+			this.scene.add(mesh);
+			
+			// Create tag object
+			const tag = {
+				id,
+				name: displayName,
+				originalName: name,
+				url: url || '#',
+				mesh,
+				color: options.color ? new THREE.Color(options.color) : color.clone(),
+				createdAt: Date.now(),
+				options,
+				tokenData, // Store token data for scoreboard display
+				metadata: {
+					isToken: !!tokenData,
+					addedAt: Date.now(),
+					source: options.source || 'manual',
+				}
+			};
+			
+			// Store reference
+			this.tags.push(tag);
+			
+			// Store by name for easy lookup (uppercase for case-insensitive lookup)
+			const lookupName = name.toUpperCase();
+			this.tagsByName.set(lookupName, tag);
+			
+			console.log(`Tag created successfully: ${displayName}`);
+			
+			// Add to physics system (place tag in space)
+			const success = this.physics.addNewTag(tag, this.tags);
+			
+			if (!success) {
+				console.warn(`Failed to place tag "${name}" in space`);
+				// Remove from scene if physics placement failed
+				this.scene.remove(mesh);
+				
+				// Remove from collections
+				const index = this.tags.findIndex(t => t.id === tag.id);
+				if (index !== -1) {
+					this.tags.splice(index, 1);
+				}
+				this.tagsByName.delete(lookupName);
+				
+				return null;
+			}
+			
+			return tag;
+		} catch (error) {
+			console.error(`Error creating tag geometry for "${displayName}":`, error);
+			console.error('Font details:', {
+				fontLoaded: this.fontLoaded,
+				fontAvailable: !!this.tagStyle.font,
+				fontPath: this.options.fontPath
+			});
 			return null;
 		}
-		
-		return tag;
 	}
 	
 	/**
