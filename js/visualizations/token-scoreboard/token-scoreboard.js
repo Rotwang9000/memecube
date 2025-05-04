@@ -68,9 +68,9 @@ export class TokenScoreboard {
 		
 		// Scoreboard dimensions
 		this.width = 15;
-		this.height = 8; // Default height when normal
+		this.height = 12 // Default height when normal
 		this.expandedHeight = 20; // Placeholder, will be computed dynamically
-		this.targetHeight = this.sizeMode === 'tall' ? this.computeExpandedHeight() : (this.sizeMode === 'normal' ? 8 : 1);
+		this.targetHeight = this.sizeMode === 'tall' ? this.computeExpandedHeight() : (this.sizeMode === 'normal' ? 12 : 1);
 		this.initialHeight = this.height;
 		
 		// Token display settings
@@ -87,7 +87,7 @@ export class TokenScoreboard {
 		
 		// Create the physical structure using the imported modules
 		createScoreboardStructure(this.scoreboardGroup, this.width, this.height);
-		this.cornerBolts = addDecorativeElements(this.scoreboardGroup, this.width , this.height);
+		this.cornerBolts = addDecorativeElements(this.scoreboardGroup, this.width , this.height * 1.1);
 		
 		// Create subsystems
 		this.ledDisplay = new LEDDisplay(this.scoreboardGroup, this.width -1.2, this.height);
@@ -124,7 +124,7 @@ export class TokenScoreboard {
 		
 		// Ensure buttons are positioned correctly on initialization
 		if (this.buttonManager) {
-			this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+			this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
 		}
 		
 		// Add event listener for window resize
@@ -362,6 +362,23 @@ export class TokenScoreboard {
 					return;
 				}
 				
+				// CRITICAL FIX: In detail mode, also keep social buttons and exit button visible
+				if (this.detailMode && this.buttonManager) {
+					// Keep exit button visible
+					if (obj === this.buttonManager.exitButton || 
+						(obj.parent && obj.parent === this.buttonManager.exitButton)) {
+						obj.visible = true;
+						return;
+					}
+					
+					// Keep social buttons visible
+					if (this.buttonManager.socialButtons && 
+						this.buttonManager.socialButtons.some(btn => obj === btn || (obj.parent && obj.parent === btn))) {
+						obj.visible = true;
+						return;
+					}
+				}
+				
 				// Hide everything else
 				obj.visible = false;
 			});
@@ -407,6 +424,11 @@ export class TokenScoreboard {
 			// Hide the dedicated expand planet in non-hidden modes
 			if (this.expandPlanet) {
 				this.expandPlanet.visible = false;
+			}
+			
+			// CRITICAL FIX: In detail mode, make sure social buttons are properly repositioned
+			if (this.detailMode && this.buttonManager) {
+				this._positionSocialButtonsAboveScoreboard();
 			}
 		}
 	}
@@ -517,6 +539,7 @@ export class TokenScoreboard {
 		}
 		
 		let url = null;
+		let hasLink = false;
 		
 		// Get the appropriate URL based on platform
 		if (platform === 'twitter') {
@@ -529,17 +552,22 @@ export class TokenScoreboard {
 			if (!url && this.detailToken.baseToken?.symbol) {
 				const symbol = this.detailToken.baseToken.symbol;
 				url = `https://twitter.com/search?q=%24${symbol}`;
+				hasLink = true; // We can always create a Twitter search link with the symbol
+				console.log(`No Twitter link found, creating search link for symbol ${symbol}`);
+			} else {
+				hasLink = !!url;
 			}
 		} else if (platform === 'discord') {
 			url = this.detailToken.socialLinks?.discord || 
 				this.detailToken.links?.discord;
+			hasLink = !!url;
 		} else if (platform === 'url') {
 			// For URL, try several possible fields
 			url = this.detailToken.website || 
 				this.detailToken.socialLinks?.website || 
 				this.detailToken.links?.website ||
 				this.detailToken.explorer;
-				
+			
 			// If we have an address but no website, create an explorer link
 			if (!url && this.detailToken.tokenAddress) {
 				// Use chain-appropriate explorer
@@ -561,6 +589,10 @@ export class TokenScoreboard {
 					// Generic fallback to Etherscan
 					url = `https://etherscan.io/token/${this.detailToken.tokenAddress}`;
 				}
+				hasLink = true; // We created an explorer link
+				console.log(`No website link found, creating explorer link for address ${this.detailToken.tokenAddress}`);
+			} else {
+				hasLink = !!url;
 			}
 		}
 		
@@ -570,7 +602,59 @@ export class TokenScoreboard {
 			window.open(url, '_blank');
 		} else {
 			console.log(`No ${platform} link available for this token`);
+			
+			// Flash the button red to indicate no link
+			this._flashSocialButtonNoLink(platform);
 		}
+	}
+	
+	/**
+	 * Flash a social button red to indicate no link is available
+	 * @param {string} platform - The social media platform ('twitter', 'discord', 'url')
+	 * @private
+	 */
+	_flashSocialButtonNoLink(platform) {
+		if (!this.buttonManager || !this.buttonManager.socialButtons) return;
+		
+		// Determine which button to flash
+		let buttonIndex = -1;
+		if (platform === 'twitter') buttonIndex = 0;
+		else if (platform === 'discord') buttonIndex = 1;
+		else if (platform === 'url') buttonIndex = 2;
+		
+		if (buttonIndex === -1 || !this.buttonManager.socialButtons[buttonIndex]) return;
+		
+		const button = this.buttonManager.socialButtons[buttonIndex];
+		
+		// Save original color
+		const originalColor = 0x888888; // Grey (inactive)
+		const originalOpacity = 0.6;
+		
+		// Create informative console message based on platform
+		let message = '';
+		if (platform === 'twitter') {
+			message = `No Twitter/X link found for ${this.detailToken.baseToken?.symbol || 'token'}`;
+			if (this.detailToken.baseToken?.symbol) {
+				message += `. You can manually search for $${this.detailToken.baseToken.symbol} on Twitter.`;
+			}
+		} else if (platform === 'discord') {
+			message = `No Discord link found for ${this.detailToken.baseToken?.symbol || 'token'}`;
+		} else if (platform === 'url') {
+			message = `No website or explorer link found for ${this.detailToken.baseToken?.symbol || 'token'}`;
+			if (this.detailToken.tokenAddress) {
+				message += `. You can manually search for address ${this.detailToken.tokenAddress.substring(0, 10)}... on a blockchain explorer.`;
+			}
+		}
+		
+		console.log(message);
+		
+		// Flash red
+		this._setSocialButtonColor(button, 0xFF0000, 1.0); // Bright red
+		
+		// Return to grey after a short delay
+		setTimeout(() => {
+			this._setSocialButtonColor(button, originalColor, originalOpacity);
+		}, 300);
 	}
 	
 	/**
@@ -685,7 +769,7 @@ export class TokenScoreboard {
 		
 		// Ensure buttons are updated dynamically, especially when coming from hidden mode
 		if (mode === 'normal' && this.buttonManager) {
-			this.buttonManager.updateButtonPositions(this.width, this.height, mode);
+			this.buttonManager.updateButtonPositions(this.width, this.height, mode, this.detailMode);
 			this.buttonManager.updateButtonColors(mode);
 			// Reset material properties to ensure visibility settings are correct
 			[this.buttonManager.expandButton, this.buttonManager.collapseButton, this.buttonManager.urlButton].forEach(button => {
@@ -782,7 +866,7 @@ export class TokenScoreboard {
 					topRightBolt.userData.targetTallPosition = new THREE.Vector3(
 						viewWidth * horizontalSpreadFactor, // Positive X = right side
 						viewHeight * 0.48,
-						topRightBolt.userData.originalPosition?.z || -1.0
+						topRightBolt.userData.originalPosition?.z || -0.2
 					);
 				}
 				
@@ -790,7 +874,7 @@ export class TokenScoreboard {
 					topLeftBolt.userData.targetTallPosition = new THREE.Vector3(
 						-viewWidth * horizontalSpreadFactor, // Negative X = left side
 						viewHeight * 0.48,
-						topLeftBolt.userData.originalPosition?.z || -1.0
+						topLeftBolt.userData.originalPosition?.z || -0.2
 					);
 				}
 				
@@ -828,10 +912,7 @@ export class TokenScoreboard {
 			if (this.scoreboardGroup.userData.displayMesh) {
 				this.scoreboardGroup.userData.displayMesh.visible = true;
 			}
-			if (this.scoreboardGroup.userData.backPanelMesh) {
-				this.scoreboardGroup.userData.backPanelMesh.visible = true;
-			}
-			
+
 			// Force sync jets with bolts after position update
 			if (this.jetsManager) {
 				this.jetsManager.syncJetsWithBolts(true); // Force update
@@ -1223,11 +1304,11 @@ export class TokenScoreboard {
 				rightBolts.forEach(bolt => {
 					const isTopRow = bolt.position.y > 0;
 					const yPos = isTopRow ? (halfHeight + 0.1) : (-halfHeight - 0.1);
-					bolt.position.set(halfWidth + 0.45, yPos, -1.0);
+					bolt.position.set(halfWidth + 0.45, yPos, -0.2);
 					bolt.visible = true;
 					
 					if (bolt.userData.plate) {
-						bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.9);
+						bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.1);
 						bolt.userData.plate.visible = true;
 					}
 				});
@@ -1236,11 +1317,11 @@ export class TokenScoreboard {
 				leftBolts.forEach(bolt => {
 					const isTopRow = bolt.position.y > 0;
 					const yPos = isTopRow ? (halfHeight + 0.1) : (-halfHeight - 0.1);
-					bolt.position.set(-halfWidth - 0.45, yPos, -1.0);
+					bolt.position.set(-halfWidth - 0.45, yPos, -0.2);
 					bolt.visible = true;
 					
 					if (bolt.userData.plate) {
-						bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.9);
+						bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.1);
 						bolt.userData.plate.visible = true;
 					}
 				});
@@ -1249,10 +1330,8 @@ export class TokenScoreboard {
 			// Make display structure visible
 			if (this.scoreboardGroup?.userData) {
 				const displayMesh = this.scoreboardGroup.userData.displayMesh;
-				const backMesh = this.scoreboardGroup.userData.backPanelMesh;
 				
 				if (displayMesh) displayMesh.visible = true;
-				if (backMesh) backMesh.visible = true;
 			}
 			
 			// Make jets visible
@@ -1265,7 +1344,7 @@ export class TokenScoreboard {
 			// Make buttons visible and positioned correctly
 			if (this.buttonManager) {
 				// Update button positions
-				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
 				
 				// Ensure appropriate buttons are visible
 				if (this.buttonManager.expandButton) {
@@ -1373,19 +1452,35 @@ export class TokenScoreboard {
 					});
 				}
 				
-				// Hide all other buttons
+				// Hide all other buttons except in detail mode
 				if (this.buttonManager.collapseButton) {
 					this.buttonManager.collapseButton.visible = false;
 				}
-				if (this.buttonManager.exitButton) {
+				if (this.buttonManager.exitButton && !this.detailMode) {
 					this.buttonManager.exitButton.visible = false;
+				} else if (this.buttonManager.exitButton && this.detailMode) {
+					this.buttonManager.exitButton.visible = true;
 				}
-				this.buttonManager.socialButtons.forEach(btn => {
-					if (btn) btn.visible = false;
-				});
+				
+				// CRITICAL FIX: Don't hide social buttons in detail mode
+				if (!this.detailMode) {
+					this.buttonManager.socialButtons.forEach(btn => {
+						if (btn) btn.visible = false;
+					});
+				} else {
+					// In detail mode, make social buttons visible and position correctly
+					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+					this._positionSocialButtonsAboveScoreboard();
+				}
 			} else {
 				// For normal and tall modes, use the standard button positioning
-				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
+				
+				// CRITICAL FIX: In detail mode, ensure social buttons are positioned above
+				if (this.detailMode) {
+					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+					this._positionSocialButtonsAboveScoreboard();
+				}
 			}
 			
 			// Special handling for hidden mode - ensure only expand button is visible
@@ -1398,22 +1493,53 @@ export class TokenScoreboard {
 					});
 				}
 				
-				// Ensure only the dedicated expand button remains visible
-				this.scoreboardGroup.traverse(obj => {
-					// Keep the root group visible
-					if (obj === this.scoreboardGroup) return;
+				// If NOT in detail mode, ensure only the dedicated expand button remains visible
+				if (!this.detailMode) {
+					this.scoreboardGroup.traverse(obj => {
+						// Keep the root group visible
+						if (obj === this.scoreboardGroup) return;
+						
+						// Keep expand button hierarchy visible
+						if (this.buttonManager && (
+							obj === this.buttonManager.expandButton ||
+							(obj.parent && obj.parent === this.buttonManager.expandButton))) {
+							obj.visible = true;
+							return;
+						}
+						
+						// Hide everything else
+						obj.visible = false;
+					});
+				} else {
+					// In detail mode, also keep exit button and social buttons visible
+					this.scoreboardGroup.traverse(obj => {
+						// Keep the root group visible
+						if (obj === this.scoreboardGroup) return;
+						
+						// Keep expand button hierarchy visible
+						if (this.buttonManager && (
+							obj === this.buttonManager.expandButton ||
+							(obj.parent && obj.parent === this.buttonManager.expandButton) ||
+							obj === this.buttonManager.exitButton ||
+							(obj.parent && obj.parent === this.buttonManager.exitButton))) {
+							obj.visible = true;
+							return;
+						}
+						
+						// Keep social buttons visible in detail mode
+						if (this.buttonManager && this.buttonManager.socialButtons.some(btn => 
+							obj === btn || (obj.parent && obj.parent === btn))) {
+							obj.visible = true;
+							return;
+						}
+						
+						// Hide everything else
+						obj.visible = false;
+					});
 					
-					// Keep expand button hierarchy visible
-					if (this.buttonManager && (
-						obj === this.buttonManager.expandButton ||
-						(obj.parent && obj.parent === this.buttonManager.expandButton))) {
-						obj.visible = true;
-						return;
-					}
-					
-					// Hide everything else
-					obj.visible = false;
-				});
+					// Reposition social buttons
+					this._positionSocialButtonsAboveScoreboard();
+				}
 			}
 		}
 		
@@ -1486,7 +1612,7 @@ export class TokenScoreboard {
 					const originalY = bolt.position.y;
 					
 					// Set the position - always on right side (positive X)
-					bolt.position.set(halfWidth + 0.45, yPos, -1.0);
+					bolt.position.set(halfWidth + 0.45, yPos, -0.2);
 					bolt.visible = true;
 					
 					// Check if position changed significantly
@@ -1497,7 +1623,7 @@ export class TokenScoreboard {
 					
 					// Update plate position if it exists
 					if (bolt.userData.plate) {
-						bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.9);
+						bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.1);
 						bolt.userData.plate.visible = true;
 					}
 					
@@ -1521,7 +1647,7 @@ export class TokenScoreboard {
 					const originalY = bolt.position.y;
 					
 					// Set the position - always on left side (negative X)
-					bolt.position.set(-halfWidth - 0.45, yPos, -1.0);
+					bolt.position.set(-halfWidth - 0.45, yPos, -0.2);
 					bolt.visible = true;
 					
 					// Check if position changed significantly
@@ -1532,7 +1658,7 @@ export class TokenScoreboard {
 					
 					// Update plate position if it exists
 					if (bolt.userData.plate) {
-						bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.9);
+						bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.1);
 						bolt.userData.plate.visible = true;
 					}
 					
@@ -1581,23 +1707,42 @@ export class TokenScoreboard {
 					});
 				}
 				
-				// Hide all other buttons
+				// Hide all other buttons except needed for detail mode
 				if (this.buttonManager.collapseButton) {
 					this.buttonManager.collapseButton.visible = false;
 				}
-				if (this.buttonManager.exitButton) {
+				
+				// Only hide exit button if not in detail mode
+				if (this.buttonManager.exitButton && !this.detailMode) {
 					this.buttonManager.exitButton.visible = false;
+				} else if (this.buttonManager.exitButton && this.detailMode) {
+					// Make sure exit button is visible in detail mode
+					this.buttonManager.exitButton.visible = true;
 				}
-				this.buttonManager.socialButtons.forEach(btn => {
-					if (btn) btn.visible = false;
-				});
+				
+				// CRITICAL FIX: Don't hide social buttons in detail mode
+				if (!this.detailMode) {
+					this.buttonManager.socialButtons.forEach(btn => {
+						if (btn) btn.visible = false;
+					});
+				} else if (this.detailMode) {
+					// In detail mode, make sure social buttons are visible
+					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+					this._positionSocialButtonsAboveScoreboard();
+				}
 			} else {
 				// For normal and tall modes, use the standard button positioning
-				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
+				
+				// CRITICAL FIX: In detail mode, reposition social buttons above scoreboard
+				if (this.detailMode) {
+					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+					this._positionSocialButtonsAboveScoreboard();
+				}
 			}
 			
-			// Special handling for hidden mode - ensure only expand button is visible
-			if (this.sizeMode === 'hidden') {
+			// Special handling for hidden mode - with exception for detail mode
+			if (this.sizeMode === 'hidden' && !this.detailMode) {
 				// Hide all scoreboard elements except the expand button
 				this.scoreboardGroup.traverse(obj => {
 					// Skip the group itself
@@ -1614,6 +1759,35 @@ export class TokenScoreboard {
 					// Hide everything else
 					obj.visible = false;
 				});
+			} else if (this.sizeMode === 'hidden' && this.detailMode) {
+				// In detail mode with hidden scoreboard, keep social buttons and exit button visible
+				this.scoreboardGroup.traverse(obj => {
+					// Skip the group itself
+					if (obj === this.scoreboardGroup) return;
+					
+					// Keep expand and exit buttons visible
+					if (this.buttonManager && (
+						obj === this.buttonManager.expandButton || 
+						(obj.parent && obj.parent === this.buttonManager.expandButton) ||
+						obj === this.buttonManager.exitButton ||
+						(obj.parent && obj.parent === this.buttonManager.exitButton))) {
+						obj.visible = true;
+						return;
+					}
+					
+					// Keep social buttons visible in detail mode
+					if (this.buttonManager && this.buttonManager.socialButtons.some(btn => 
+						obj === btn || (obj.parent && obj.parent === btn))) {
+						obj.visible = true;
+						return;
+					}
+					
+					// Hide everything else
+					obj.visible = false;
+				});
+				
+				// Reposition social buttons
+				this._positionSocialButtonsAboveScoreboard();
 			}
 		}
 		
@@ -1655,15 +1829,11 @@ export class TokenScoreboard {
 		// Hide/show background elements based on mode
 		if (this.scoreboardGroup?.userData) {
 			const displayMesh = this.scoreboardGroup.userData.displayMesh;
-			const backMesh = this.scoreboardGroup.userData.backPanelMesh;
 			
 			if (this.sizeMode === 'hidden') {
-				// Hide display and back panel in hidden mode
+				// Hide display in hidden mode
 				if (displayMesh) {
 					displayMesh.visible = false;
-				}
-				if (backMesh) {
-					backMesh.visible = false;
 				}
 				
 				// Hide jets in hidden mode
@@ -1684,17 +1854,6 @@ export class TokenScoreboard {
 					}
 					if (displayMesh.material) {
 						displayMesh.material.opacity = 0.3;
-					}
-				}
-				
-				if (backMesh) {
-					backMesh.visible = true;
-					const scaleY = this.height / this.initialHeight;
-					if (isFinite(scaleY) && scaleY > 0) {
-						backMesh.scale.y = scaleY;
-					}
-					if (backMesh.material) {
-						backMesh.material.opacity = 0.1;
 					}
 				}
 				
@@ -1805,6 +1964,12 @@ export class TokenScoreboard {
 			
 			// Make social media buttons visible for detail mode
 			this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+			
+			// Set appropriate colors for social buttons based on link availability
+			this._updateSocialButtonColors();
+			
+			// CRITICAL FIX: Position social buttons above the scoreboard
+			this._positionSocialButtonsAboveScoreboard();
 		}
 		
 		// Increase target height slightly if in normal mode
@@ -1817,8 +1982,161 @@ export class TokenScoreboard {
 			if (this.detailMode) {
 				console.log("Triggering immediate token detail refresh");
 				this._refreshDetailTokenData();
+				
+				// CRITICAL FIX: Make sure social buttons are still visible after refresh
+				if (this.buttonManager) {
+					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+					this._updateSocialButtonColors();
+					this._positionSocialButtonsAboveScoreboard();
+				}
 			}
 		}, 100);
+	}
+	
+	/**
+	 * Update social button colors based on link availability
+	 * @private
+	 */
+	_updateSocialButtonColors() {
+		if (!this.buttonManager || !this.buttonManager.socialButtons) return;
+		
+		console.log("Updating social button colors based on link availability");
+		
+		const socialButtons = this.buttonManager.socialButtons;
+		
+		// Check if we have the buttons we expect
+		if (!this.detailToken) return;
+		
+		// Twitter button (index 0)
+		if (socialButtons[0]) {
+			const hasTwitter = !!this.detailToken.socialLinks?.twitter || 
+							  !!this.detailToken.socialLinks?.x || 
+							  !!this.detailToken.links?.twitter || 
+							  !!this.detailToken.links?.x ||
+							  !!this.detailToken.baseToken?.symbol; // Always allow Twitter search by symbol
+			
+			this._setSocialButtonColor(socialButtons[0], 
+				hasTwitter ? 0x1DA1F2 : 0x888888, // Blue if link exists, grey if not
+				hasTwitter ? 1.0 : 0.6); // Full opacity if link exists, dimmed if not
+			
+			console.log(`Twitter button color set to ${hasTwitter ? 'active (blue)' : 'inactive (grey)'}`);
+		}
+		
+		// Discord button (index 1)
+		if (socialButtons[1]) {
+			const hasDiscord = !!this.detailToken.socialLinks?.discord || 
+							 !!this.detailToken.links?.discord;
+			
+			this._setSocialButtonColor(socialButtons[1], 
+				hasDiscord ? 0x5865F2 : 0x888888, // Purple if link exists, grey if not
+				hasDiscord ? 1.0 : 0.6); // Full opacity if link exists, dimmed if not
+			
+			console.log(`Discord button color set to ${hasDiscord ? 'active (purple)' : 'inactive (grey)'}`);
+		}
+		
+		// URL button (index 2)
+		if (socialButtons[2]) {
+			const hasUrl = !!this.detailToken.website || 
+						 !!this.detailToken.socialLinks?.website || 
+						 !!this.detailToken.links?.website ||
+						 !!this.detailToken.explorer ||
+						 !!this.detailToken.tokenAddress; // Token address means we can create explorer link
+			
+			this._setSocialButtonColor(socialButtons[2], 
+				hasUrl ? 0x00C853 : 0x888888, // Green if link exists, grey if not
+				hasUrl ? 1.0 : 0.6); // Full opacity if link exists, dimmed if not
+			
+			console.log(`URL button color set to ${hasUrl ? 'active (green)' : 'inactive (grey)'}`);
+		}
+	}
+	
+	/**
+	 * Helper to set a social button color and opacity
+	 * @private
+	 */
+	_setSocialButtonColor(button, color, opacity) {
+		if (!button) return;
+		
+		button.traverse(obj => {
+			// Find the main planet material (should be first child with material)
+			if (obj.material && obj.geometry && obj.geometry.type.includes('Sphere')) {
+				obj.material.color.setHex(color);
+				if (obj.material.transparent) {
+					obj.material.opacity = opacity;
+				}
+			}
+			
+			// Also adjust any ring material opacity
+			if (obj.material && obj.geometry && obj.geometry.type.includes('Ring')) {
+				if (obj.material.transparent) {
+					obj.material.opacity = opacity * 0.5; // Rings are half as opaque
+				}
+			}
+		});
+	}
+	
+	/**
+	 * Position social buttons above the scoreboard for better visibility
+	 * @private
+	 */
+	_positionSocialButtonsAboveScoreboard() {
+		if (!this.buttonManager) {
+			console.log("Cannot position social buttons: button manager not found");
+			return;
+		}
+		
+		if (!this.buttonManager.socialButtons || !Array.isArray(this.buttonManager.socialButtons) || this.buttonManager.socialButtons.length === 0) {
+			console.log("Cannot position social buttons: no social buttons found", 
+				this.buttonManager.socialButtons ? `(array length: ${this.buttonManager.socialButtons.length})` : "(buttons undefined)");
+			return;
+		}
+		
+		console.log("Positioning social buttons above scoreboard for detail mode");
+		
+		const topOffset = 2.0; // Space above scoreboard
+		const halfWidth = this.width / 2;
+		const topY = this.height/2 + topOffset; // Above the scoreboard
+		const buttonZ = -1.2; // Keep in front
+		const socialButtonSpacing = 2.0; // Wider spacing for better visibility
+		
+		// Position each social button along the top
+		const socialButtons = this.buttonManager.socialButtons;
+		const totalWidth = (socialButtons.length - 1) * socialButtonSpacing;
+		const startX = -totalWidth / 2;
+		
+		let visibleButtonCount = 0;
+		
+		socialButtons.forEach((button, index) => {
+			// Skip if button doesn't exist
+			if (!button) {
+				console.log(`Social button at index ${index} is undefined`);
+				return;
+			}
+			
+			// Position buttons along the top, spread out evenly
+			button.position.set(
+				startX + index * socialButtonSpacing,
+				topY, // Above scoreboard
+				buttonZ // In front
+			);
+			
+			// Force visibility and proper rendering
+			button.visible = true;
+			button.traverse(obj => {
+				if (obj.material) {
+					obj.material.depthTest = false;
+					obj.renderOrder = 100; // High render order for visibility
+					if (obj.material.transparent) {
+						obj.material.opacity = 1.0; // Full opacity
+					}
+				}
+			});
+			
+			visibleButtonCount++;
+			console.log(`Social button ${index} positioned at x=${button.position.x.toFixed(2)}, y=${button.position.y.toFixed(2)}, visible=${button.visible}`);
+		});
+		
+		console.log(`Finished positioning ${visibleButtonCount} social buttons above scoreboard`);
 	}
 	
 	/**
@@ -1831,6 +2149,15 @@ export class TokenScoreboard {
 		// Hide the exit button
 		if (this.buttonManager) {
 			this.buttonManager.setExitButtonVisibility(false);
+			
+			// Reset social button colors to their defaults before hiding
+			this.buttonManager.socialButtons.forEach((button, index) => {
+				// Reset to original button colors
+				const defaultColors = [0x1DA1F2, 0x5865F2, 0x00C853]; // Twitter blue, Discord purple, URL green
+				if (button && index < defaultColors.length) {
+					this._setSocialButtonColor(button, defaultColors[index], 0.9);
+				}
+			});
 			
 			// Hide social media buttons when exiting detail mode
 			// Keep them visible in hidden mode though
@@ -1929,6 +2256,9 @@ export class TokenScoreboard {
 					}
 				}
 			}
+			
+			// Update social button colors with fresh data
+			this._updateSocialButtonColors();
 			
 			this.lastDetailRefresh = Date.now();
 		} catch (err) {
@@ -2052,6 +2382,9 @@ export class TokenScoreboard {
 				10: 'OP',
 				8453: 'BASE',
 			};
+
+			row += 6;
+
 			
 			const chainName = chainMap[this.detailToken.chainId] || `CH:${this.detailToken.chainId || 'N/A'}`;
 			d.drawText(chainName, row, 2, 'green');
@@ -2059,9 +2392,9 @@ export class TokenScoreboard {
 			// Show address or link info
 			if (this.detailToken.tokenAddress) {
 				//split the address into 3 lines of 10 characters each
-				const addrLines = this.detailToken.tokenAddress.match(/.{1,10}/g);
+				const addrLines = this.detailToken.tokenAddress.match(/.{1,15}/g);
 				for (let i = 0; i < addrLines.length; i++) {
-					d.drawText(addrLines[i], row, 20 + i * 12, 'yellow');
+					d.drawText(addrLines[i], row + (i * 5), i, 'yellow');
 				}
 			}
 		}
@@ -2151,7 +2484,7 @@ export class TokenScoreboard {
 			
 			// Make sure the button manager's buttons are also visible
 			if (this.buttonManager) {
-				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode);
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
 				this.buttonManager.updateButtonColors(this.sizeMode);
 				
 				// Ensure expand button is visible
@@ -2279,6 +2612,16 @@ export class TokenScoreboard {
 						this.ledDisplay.drawTokenInfo(this.displayData[i], i * tokenSpacing);
 					}
 				}
+			}
+		}
+		
+		// CRITICAL FIX: Always ensure social buttons visibility in detail mode
+		if (this.detailMode && this.buttonManager && !this.isAnimatingMode) {
+			const buttonsNeedFixing = this.buttonManager.socialButtons.some(btn => !btn.visible);
+			if (buttonsNeedFixing) {
+				console.log("Re-enabling social buttons visibility in detail mode");
+				this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+				this._positionSocialButtonsAboveScoreboard();
 			}
 		}
 	}
@@ -2662,7 +3005,7 @@ export class TokenScoreboard {
 			const originalY = bolt.position.y;
 			
 			// Set position explicitly - always on right side
-			bolt.position.set(halfWidth + 0.45, yPos, -1.0);
+			bolt.position.set(halfWidth + 0.45, yPos, -0.2);
 			bolt.visible = true;
 			
 			// Check if position changed significantly
@@ -2673,7 +3016,7 @@ export class TokenScoreboard {
 			
 			// Update plate position if it exists
 			if (bolt.userData.plate) {
-				bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.9);
+				bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.1);
 				bolt.userData.plate.visible = true;
 			}
 			
@@ -2694,7 +3037,7 @@ export class TokenScoreboard {
 			const originalY = bolt.position.y;
 			
 			// Set position explicitly - always on left side
-			bolt.position.set(-halfWidth - 0.45, yPos, -1.0);
+			bolt.position.set(-halfWidth - 0.45, yPos, -0.2);
 			bolt.visible = true;
 			
 			// Check if position changed significantly
@@ -2705,7 +3048,7 @@ export class TokenScoreboard {
 			
 			// Update plate position if it exists
 			if (bolt.userData.plate) {
-				bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.9);
+				bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.1);
 				bolt.userData.plate.visible = true;
 			}
 			

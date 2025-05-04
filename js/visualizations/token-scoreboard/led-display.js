@@ -24,7 +24,7 @@ export class LEDDisplay {
 	 */
 	static calculateDotLayout(width, height, dotCols) {
 		const totalWidth = width * 0.98;
-		const totalHeight = height * 0.95;
+		const totalHeight = height * 0.9;
 		const baseSpacing = (totalWidth / dotCols) * 1.1;
 		let dotRows = Math.max(1, Math.floor((height * 1.1) / baseSpacing));
 		let dotSpacing = Math.min(totalWidth / dotCols, totalHeight / dotRows) * 1.3;
@@ -97,7 +97,7 @@ export class LEDDisplay {
 				const dot = new THREE.Mesh(dotGeometry, this.dotMaterials.off);
 				dot.position.x = startX + col * this.dotSpacing * 0.9;
 				dot.position.y = startY + row * this.dotSpacing * 0.9;
-				dot.position.z = -0.3;
+				dot.position.z = 0;
 				dot.rotation.y = Math.PI;
 				dot.scale.set(this.dotSize, this.dotSize, 1);
 				this.dots[row][col] = dot;

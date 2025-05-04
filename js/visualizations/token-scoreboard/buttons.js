@@ -565,9 +565,10 @@ export class ButtonManager {
 	 * @param {number} width - Scoreboard width
 	 * @param {number} height - Scoreboard height
 	 * @param {string} sizeMode - Current size mode ('normal', 'tall', 'hidden')
+	 * @param {boolean} detailMode - Whether the scoreboard is in token detail mode
 	 */
-	updateButtonPositions(width, height, sizeMode) {
-		console.log(`Updating button positions: mode=${sizeMode}, width=${width}, height=${height}`);
+	updateButtonPositions(width, height, sizeMode, detailMode = false) {
+		console.log(`Updating button positions: mode=${sizeMode}, width=${width}, height=${height}, detailMode=${detailMode}`);
 		
 		// Ensure buttons are always positioned outside the scoreboard area
 		const topOffset = 2.0; // Increased distance above the scoreboard
@@ -661,12 +662,12 @@ export class ButtonManager {
 		// Always position exit button at top right corner
 		this.exitButton.position.set(width/2, height/2 + topOffset, buttonZ);
 		
-		// Position social media buttons at the bottom 
+		// Position social media buttons based on mode and detail status
 		if (this.socialButtons.length > 0) {
 			const totalWidth = (this.socialButtons.length - 1) * socialButtonSpacing;
 			const startX = -totalWidth / 2;
 			
-			// Position each social button evenly spaced along the bottom
+			// Position each social button
 			this.socialButtons.forEach((button, index) => {
 				if (sizeMode === 'hidden') {
 					// In hidden mode, position social buttons in a horizontal line near the main buttons
@@ -681,6 +682,31 @@ export class ButtonManager {
 					
 					// Always visible in hidden mode
 					button.visible = true;
+				} else if (detailMode) {
+					// CRITICAL FIX: In detail mode, position above the scoreboard for better visibility
+					const topY = height/2 + topOffset; // Position at the top
+					
+					button.position.set(
+						startX + index * socialButtonSpacing,
+						topY, // Above scoreboard
+						buttonZ - 0.2 // In front of other buttons
+					);
+					
+					// Always visible in detail mode
+					button.visible = true;
+					
+					// Ensure button and its children have proper visibility settings
+					button.traverse(obj => {
+						if (obj.material) {
+							obj.material.depthTest = false;
+							obj.renderOrder = 110; // Higher than other buttons
+							if (obj.material.transparent) {
+								obj.material.opacity = 1.0; // Full opacity
+							}
+						}
+					});
+					
+					console.log(`Detail mode: Social button ${index} positioned at top y=${topY}`);
 				} else {
 					// Normal positioning for other modes
 					button.position.set(
@@ -698,7 +724,7 @@ export class ButtonManager {
 					button.traverse(obj => {
 						if (obj.material) {
 							// In hidden mode, make sure materials are fully visible
-							if (sizeMode === 'hidden') {
+							if (sizeMode === 'hidden' || detailMode) {
 								obj.material.depthTest = false;
 								obj.renderOrder = 100;
 								if (obj.material.transparent) {
@@ -714,7 +740,7 @@ export class ButtonManager {
 				}
 			});
 			
-			console.log(`Social buttons positioned: visible=${this.socialVisible || sizeMode === 'hidden'}`);
+			console.log(`Social buttons positioned: visible=${this.socialVisible || sizeMode === 'hidden' || detailMode}`);
 		}
 		
 		// Double check positions are valid
@@ -722,7 +748,7 @@ export class ButtonManager {
 			- Expand: ${JSON.stringify(this.expandButton.position.toArray())} visible=${this.expandButton.visible}
 			- Collapse: ${JSON.stringify(this.collapseButton.position.toArray())} visible=${this.collapseButton.visible}
 			- Exit: ${JSON.stringify(this.exitButton.position.toArray())} visible=${this.exitButton.visible}
-			- Socials visible: ${this.socialVisible || sizeMode === 'hidden'}
+			- Socials visible: ${this.socialVisible || sizeMode === 'hidden' || detailMode}
 		`);
 		
 		// If we have a buttons group, make sure it's positioned appropriately 
@@ -731,7 +757,7 @@ export class ButtonManager {
 			this.buttonsGroup.visible = true;
 			
 			// Make sure depthTest is disabled for all button materials in hidden mode
-			if (sizeMode === 'hidden') {
+			if (sizeMode === 'hidden' || detailMode) {
 				this.buttonsGroup.traverse(obj => {
 					if (obj.material) {
 						obj.material.depthTest = false;

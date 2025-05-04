@@ -7,37 +7,22 @@ import * as THREE from 'three';
  * @param {number} height - Height of the scoreboard
  */
 export function createScoreboardStructure(scoreboardGroup, width, height) {
-	// Create black back panel
-	const backPanelGeometry = new THREE.BoxGeometry(width, height, 0.05);
-	const backPanelMaterial = new THREE.MeshPhongMaterial({
-		color: 0x000000,
-		transparent: true,
-		opacity: 0.1,
-		depthTest: true
-	});
-	const backPanel = new THREE.Mesh(backPanelGeometry, backPanelMaterial);
-	backPanel.position.z = -1.5; // Furthest back
-	backPanel.renderOrder = 1; // Lower render order (drawn first)
-	scoreboardGroup.add(backPanel);
-	
-	// Store reference to the back panel mesh for later scaling
-	scoreboardGroup.userData.backPanelMesh = backPanel;
-	
-	// Create semi-transparent LED display area
-	const displayGeometry = new THREE.BoxGeometry(width * 0.98, height * 0.95, 0.02);
+	// Create semi-transparent LED display area/background
+	const displayGeometry = new THREE.BoxGeometry(width, height, 0.02);
 	const displayMaterial = new THREE.MeshPhongMaterial({
 		color: 0x000000,
 		transparent: true,
-		opacity: 0.3,
-		depthTest: true
+		opacity: 0.4,
+		depthTest: true  // Ensure it's always visible behind LEDs
 	});
 	const displayMesh = new THREE.Mesh(displayGeometry, displayMaterial);
-	displayMesh.position.z = -0.5; // In front of back panel, behind LEDs
-	displayMesh.renderOrder = 2; // Higher render order (drawn later)
+	displayMesh.position.z = 1.5; // Higher positive Z puts it behind the LEDs
+	displayMesh.renderOrder = 1; // Lower render order (drawn first)
 	scoreboardGroup.add(displayMesh);
 	
 	// Store reference to the display mesh for later scaling
 	scoreboardGroup.userData.displayMesh = displayMesh;
+
 	
 	// Add ambient lighting specifically for the scoreboard
 	const ambientLight = new THREE.AmbientLight(0xffffff, 0.2);
@@ -71,12 +56,12 @@ export function addDecorativeElements(scoreboardGroup, width, height) {
 		});
 		const bolt = new THREE.Mesh(boltGeometry, boltMaterial);
 		bolt.rotation.x = Math.PI / 2; // Rotate to face outward
-		bolt.position.set(x, y, -1.0); // Position in front of display (more negative Z)
+		bolt.position.set(x, y, -0.2); // Position in front of the LEDs (at z=0)
 		bolt.renderOrder = 10; // High render order to be in front
 		
 		// Add user data to track which side this bolt belongs to
 		bolt.userData.isRightSide = isRight;
-		bolt.userData.originalPosition = new THREE.Vector3(x, y, -1.0);
+		bolt.userData.originalPosition = new THREE.Vector3(x, y, -0.2);
 		bolt.userData.isCornerBolt = true;
 		
 		// Add a decorative plate behind the bolt (use cylinder instead of box)
@@ -90,7 +75,7 @@ export function addDecorativeElements(scoreboardGroup, width, height) {
 		});
 		const plate = new THREE.Mesh(plateGeometry, plateMaterial);
 		plate.rotation.x = Math.PI / 2; // Rotate to face outward like bolt
-		plate.position.set(x, y, -0.9); // Slightly behind the bolt
+		plate.position.set(x, y, -0.1); // Slightly behind the bolt but in front of the LEDs
 		plate.renderOrder = 9; // Lower than bolt but higher than background
 		
 		// Store reference to the plate
