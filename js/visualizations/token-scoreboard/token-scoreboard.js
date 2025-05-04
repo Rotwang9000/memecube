@@ -318,7 +318,7 @@ export class TokenScoreboard {
 						
 						// One final jet effect when movement completes
 						if (this.sizeMode !== 'hidden') {
-							this.triggerJetEffect(0.7);
+							this.triggerJetEffect(0.7, this._burstFromOrigin);
 						}
 					}
 				}, 150); // Activate jets every 150ms during movement
@@ -597,8 +597,46 @@ export class TokenScoreboard {
 		const previousMode = this.sizeMode;
 		this.sizeMode = mode;
 		
-		// Detect if we are expanding from hidden/small to normal
-		this._burstFromOrigin = (previousMode === 'hidden' || previousMode === 'small') && mode === 'normal';
+		// ENHANCED BURST EFFECT: Configure burst origin for more dramatic appearance
+		// Make it active for hidden/small -> normal/tall mode changes
+		this._burstFromOrigin = (previousMode === 'hidden' || previousMode === 'small') && 
+			(mode === 'normal' || mode === 'tall');
+		
+		// Calculate a better burst origin position if we're doing a burst effect
+		if (this._burstFromOrigin) {
+			// Create a center point slightly toward the camera for better visibility
+			this._burstOriginPoint = new THREE.Vector3(0, 0, -0.5);
+			
+			// Pre-position bolts at burst origin if we're doing a burst effect
+			// This creates a more dramatic start to the animation
+			if (this.cornerBolts) {
+				this.cornerBolts.forEach(bolt => {
+					// Make bolt visible first
+					bolt.visible = true;
+					if (bolt.userData.plate) {
+						bolt.userData.plate.visible = true;
+					}
+					
+					// Position at burst origin
+					bolt.position.copy(this._burstOriginPoint);
+					
+					// If plates exist, position them too
+					if (bolt.userData.plate) {
+						bolt.userData.plate.position.copy(this._burstOriginPoint);
+						// Offset plate slightly behind the bolt
+						bolt.userData.plate.position.z += 0.1;
+					}
+				});
+				
+				// Force sync jets with the burst origin position
+				if (this.jetsManager) {
+					this.jetsManager.syncJetsWithBolts(true);
+					
+					// Pre-emit some particles to make the burst more visible
+					this.triggerJetEffect(1.5, true); // Enable burst effect
+				}
+			}
+		}
 		
 		// Explicitly ensure LED display visibility when changing from hidden to normal/tall
 		if (previousMode === 'hidden' && (mode === 'normal' || mode === 'tall')) {
@@ -663,7 +701,9 @@ export class TokenScoreboard {
 		}
 		
 		// Fix bolt positions again before starting animation
-		this.fixBoltPositions();
+		if (!this._burstFromOrigin) {
+			this.fixBoltPositions();
+		}
 		
 		// Animate the change in scoreboard dimensions
 		this.positionAndExpandScoreboard();
@@ -819,7 +859,7 @@ export class TokenScoreboard {
 				if (this.jetsManager && this.sizeMode !== 'hidden') {
 					// Force sync jets with bolts after position update
 					this.jetsManager.syncJetsWithBolts(true); // Force update to ensure proper positioning
-					this.triggerJetEffect(0.8);
+					this.triggerJetEffect(0.8, this._burstFromOrigin);
 				}
 				
 				// Start the corner bolts animation to expand height
@@ -850,7 +890,7 @@ export class TokenScoreboard {
 						}
 					},
 					() => this.finalizeSizeModeChange(),
-					{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: new THREE.Vector3(0, 0, -1.0) }
+					{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: this._burstOriginPoint || new THREE.Vector3(0, 0, -1.0) }
 				);
 			} else {
 				// Still moving, check again soon
@@ -887,7 +927,7 @@ export class TokenScoreboard {
 					
 					// Trigger a jet effect before starting the animation for visual feedback
 					if (this.jetsManager) {
-						this.triggerJetEffect(0.9);
+						this.triggerJetEffect(0.9, this._burstFromOrigin);
 					}
 					
 					// Start the height animation
@@ -925,14 +965,14 @@ export class TokenScoreboard {
 							
 							// Periodically trigger jet effects for visual feedback
 							if (this.jetsManager && Math.random() < 0.15) {
-								this.triggerJetEffect(0.6 * progress);
+								this.triggerJetEffect(0.6 * progress, this._burstFromOrigin);
 							}
 						},
 						() => {
 							console.log("Height animation complete, finalizing hidden->normal transition");
 							this.finalizeSizeModeChange();
 						},
-						{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: new THREE.Vector3(0, 0, -1.0) }
+						{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: this._burstOriginPoint || new THREE.Vector3(0, 0, -1.0) }
 					);
 				}, 100); // Short delay for visual effect
 			} else {
@@ -960,14 +1000,15 @@ export class TokenScoreboard {
 						
 						// Periodically trigger jet effects
 						if (this.jetsManager && this.sizeMode !== 'hidden' && Math.random() < 0.1) {
-							this.triggerJetEffect(0.5);
+							this.triggerJetEffect(0.5, this._burstFromOrigin);
 						}
 					},
 					() => {
 						// Finalize size mode change after animation completes
 						console.log("Height animation complete, finalizing size mode change");
 						this.finalizeSizeModeChange();
-					}
+					},
+					{ burstFromOrigin: !!this._burstFromOrigin, burstOrigin: this._burstOriginPoint || new THREE.Vector3(0, 0, -1.0) }
 				);
 			}
 		}
@@ -976,11 +1017,12 @@ export class TokenScoreboard {
 	/**
 	 * Trigger a visual jet effect from the bolts
 	 * @param {number} intensity - Optional intensity multiplier (0.0-1.0)
+	 * @param {boolean} isBurstEffect - Whether this is part of a burst effect animation
 	 */
-	triggerJetEffect(intensity = 1.0) {
+	triggerJetEffect(intensity = 1.0, isBurstEffect = false) {
 		if (!this.jetsManager || !this.cornerBolts || this.cornerBolts.length < 4) return;
 		
-		console.log(`Triggering jet effect with intensity ${intensity}`);
+		console.log(`Triggering jet effect with intensity ${intensity}${isBurstEffect ? ' (burst effect)' : ''}`);
 		
 		// First force sync jets with bolts to ensure proper positioning
 		this.jetsManager.syncJetsWithBolts(true);
@@ -1004,17 +1046,51 @@ export class TokenScoreboard {
 			// Use direct position access as both objects are in the same coordinate space
 			jet.basePosition.copy(bolt.position);
 			
-			// Create a random movement direction with strong backwards component
-			const moveDir = new THREE.Vector3(
-				(Math.random() - 0.5) * 0.4,   // Wider horizontal spread
-				(Math.random() - 0.5) * 0.4,   // Wider vertical spread
-				(Math.random() - 0.5) * 0.2 - 0.8 * intensity // Strong backward Z component
-			);
-			
-			// Emit particles directly - more particles for higher visibility
-			const particleCount = Math.ceil(30 * intensity); // Increased from 20
-			for (let i = 0; i < particleCount; i++) {
-				this.jetsManager.emitJetParticle(jet, moveDir, intensity * 2.0); // Double intensity
+			// For burst effects, create more dramatic particle distribution
+			if (isBurstEffect) {
+				// Create multiple directional bursts for a star-like pattern
+				for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+					const spread = 0.3 + Math.random() * 0.2;
+					
+					// Create directional burst with slight z-back component
+					const burstDir = new THREE.Vector3(
+						Math.cos(angle) * spread,
+						Math.sin(angle) * spread,
+						-0.7 * intensity
+					).normalize();
+					
+					// Emit particles along this direction
+					const particleCount = Math.ceil(10 * intensity);
+					for (let i = 0; i < particleCount; i++) {
+						this.jetsManager.emitJetParticle(jet, burstDir, intensity * 2.0);
+					}
+				}
+				
+				// Add additional particles in random directions
+				for (let i = 0; i < 30 * intensity; i++) {
+					const randomDir = new THREE.Vector3(
+						(Math.random() - 0.5) * 2,
+						(Math.random() - 0.5) * 2,
+						-0.8 * intensity
+					).normalize();
+					
+					this.jetsManager.emitJetParticle(jet, randomDir, intensity * 1.5);
+				}
+			} 
+			else {
+				// Standard particle emission pattern for normal effects
+				// Create a random movement direction with strong backwards component
+				const moveDir = new THREE.Vector3(
+					(Math.random() - 0.5) * 0.4,   // Wider horizontal spread
+					(Math.random() - 0.5) * 0.4,   // Wider vertical spread
+					(Math.random() - 0.5) * 0.2 - 0.8 * intensity // Strong backward Z component
+				);
+				
+				// Emit particles directly - more particles for higher visibility
+				const particleCount = Math.ceil(30 * intensity); // Increased from 20
+				for (let i = 0; i < particleCount; i++) {
+					this.jetsManager.emitJetParticle(jet, moveDir, intensity * 2.0); // Double intensity
+				}
 			}
 		});
 		
@@ -1255,8 +1331,29 @@ export class TokenScoreboard {
 		
 		// Trigger a final jet effect for visual feedback if not in hidden mode
 		if (this.jetsManager && this.sizeMode !== 'hidden') {
-			this.triggerJetEffect(0.8);
-			this.jetsManager.syncJetsWithBolts(); // Ensure jets are always synced after mode change
+			// Create a dramatic final effect using the burst parameter if this was a burst animation
+			const wasBurstAnimation = !!this._burstFromOrigin;
+			
+			// Force sync jets with bolts first
+			this.jetsManager.syncJetsWithBolts(true);
+			
+			// Create a final burst with full intensity to cap off the animation
+			this.triggerJetEffect(wasBurstAnimation ? 1.2 : 0.8, wasBurstAnimation);
+			
+			// If this was a burst animation, add an extra echo effect after a short delay
+			if (wasBurstAnimation) {
+				setTimeout(() => {
+					// One last echo effect
+					if (this.jetsManager) {
+						this.jetsManager.syncJetsWithBolts(true);
+						this.triggerJetEffect(0.7, true);
+					}
+				}, 200);
+			}
+			
+			// Clear the burst flag now that animation is complete
+			this._burstFromOrigin = false;
+			this._burstOriginPoint = null;
 		}
 		
 		// Always update button positions after mode change
@@ -1948,18 +2045,17 @@ export class TokenScoreboard {
 			// Show chain ID and age information if available
 			row += 6;
 			const chainMap = {
-				1: 'ETHEREUM',
-				56: 'BINANCE',
-				137: 'POLYGON',
-				42161: 'ARBITRUM',
-				10: 'OPTIMISM',
+				1: 'ETH',
+				56: 'BSC',
+				137: 'POLY',
+				42161: 'ARB',
+				10: 'OP',
 				8453: 'BASE',
 			};
 			
-			const chainName = chainMap[this.detailToken.chainId] || `${this.detailToken.chainId || ''}`;
+			const chainName = chainMap[this.detailToken.chainId] || `CH:${this.detailToken.chainId || 'N/A'}`;
 			d.drawText(chainName, row, 2, 'green');
-			row += 6;
-
+			
 			// Show address or link info
 			if (this.detailToken.tokenAddress) {
 				//split the address into 3 lines of 10 characters each

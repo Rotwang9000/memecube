@@ -12,7 +12,6 @@ export class JetsManager {
 		this.lastMovementTime = 0;
 		this.jetFadeSpeed = 1.2; // Reduced fade speed for longer-lasting particles
 		this._needsTestEmission = true; // Set to true to emit test particles on first update
-		this.suppressEmission = false; // Flag to control particle emission
 		
 		// Add jets group to parent
 		this.parentGroup.add(this.jetsGroup);
@@ -237,12 +236,6 @@ export class JetsManager {
 		
 		// Determine if this is part of an animated movement
 		const isAnimated = this.isMoving;
-		
-		// Skip particle emission if suppressed
-		if (this.suppressEmission) {
-			console.log("Jets activated but emission suppressed");
-			return;
-		}
 		
 		// Always emit some test particles to ensure visibility
 		console.log("Activating jets with direction:", moveDir);
@@ -500,8 +493,8 @@ export class JetsManager {
 					const movement = new THREE.Vector3().subVectors(jet.basePosition, previousPosition);
 					const movementMagnitude = movement.length();
 					
-					// If movement is significant, emit particles (unless suppressed)
-					if (movementMagnitude > 0.01 && !this.suppressEmission) {
+					// If movement is significant, emit particles
+					if (movementMagnitude > 0.01) {
 						console.log(`Bolt ${i} moved by ${movementMagnitude.toFixed(4)}, activating jet`);
 						const direction = movement.clone().normalize().multiplyScalar(-1);
 						// Invert Y component to fix direction
@@ -575,12 +568,6 @@ export class JetsManager {
 	 */
 	forceTestParticles() {
 		if (!this.jets || this.jets.length === 0) return;
-		
-		// Skip if emission is suppressed
-		if (this.suppressEmission) {
-			console.log("Test particles suppressed due to suppressEmission flag");
-			return;
-		}
 		
 		console.log("Forcing test particles from all jets");
 		
