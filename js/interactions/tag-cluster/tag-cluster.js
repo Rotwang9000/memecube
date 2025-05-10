@@ -8,11 +8,14 @@
  * - Fly-in animation for new tokens and fly-out animation for removed tokens
  * - Balanced addition of tokens (60 on first update, then 2 per update)
  * - Token data mapping with fallback strategies for incomplete data
+ * - Support for sponsored tokens with special styling (gold color and increased size)
  */
 
+import * as THREE from 'three';
 import { TagManager } from '../tag-manager.js';
 import { TagPhysics } from '../tag-physics.js';
 import { getTokenKey } from '../../utils/tokenKey.js';
+import { SponsoredTokenService } from '../../services/SponsoredTokenService.js';
 
 export class TagCluster {
 	/**
@@ -61,6 +64,9 @@ export class TagCluster {
 			this.tagManager = new TagManager(scene, camera);
 		}
 		
+		// Create a sponsored token service
+		this.sponsorService = new SponsoredTokenService();
+		
 		// Track tokens and tags
 		this.tokens = [];           // Token data from DexScreener
 		this.tokenTags = new Map(); // Map token addresses to tag IDs
@@ -70,6 +76,97 @@ export class TagCluster {
 		this.lastUpdateTime = 0;
 		this.updateCallback = null;
 		this.firstUpdate = true; // Flag for first update to add 30 tags
+		
+		// Listen for sponsorship updates
+		document.addEventListener('token-sponsorship-updated', this.handleSponsorshipUpdated.bind(this));
+	}
+	
+	/**
+	 * Handle sponsorship updates event
+	 * @param {CustomEvent} event The sponsorship updated event
+	 */
+	handleSponsorshipUpdated(event) {
+		if (!event.detail) return;
+		
+		const { tokenId, sponsorships } = event.detail;
+		
+		// Immediately apply sponsorship styling
+		Array.from(this.tokenTags.entries()).forEach(([key, tagId]) => {
+			if (key === tokenId) {
+				this.applySponsorshipStyling(key);
+			}
+		});
+	}
+	
+	/**
+	 * Apply sponsorship styling to a tag if it's sponsored
+	 * @param {string} tokenKey The token key
+	 */
+	applySponsorshipStyling(tokenKey) {
+		// Get the tagId for this token
+		const tagId = this.tokenTags.get(tokenKey);
+		if (!tagId) return;
+		
+		// Find the tag
+		const tag = this.tagManager.tags.find(t => t.id === tagId);
+		if (!tag || !tag.mesh) return;
+		
+		// Parse the token key for chainId and tokenAddress
+		const [chainId, tokenAddress] = tokenKey.split('-');
+		if (!chainId || !tokenAddress) return;
+		
+		// Check if this token is sponsored
+		const sponsorInfo = this.sponsorService.getSponsoredTokenVisuals(chainId, tokenAddress);
+		
+		if (sponsorInfo) {
+			// Apply sponsor styling
+			const originalSize = tag.originalScale || 1;
+			const boostedSize = originalSize * sponsorInfo.sizeMultiplier;
+			
+			// Store original color if not already stored
+			if (!tag.originalColor && tag.mesh.material) {
+				tag.originalColor = tag.mesh.material.color.getHex();
+			}
+			
+			// Apply gold color
+			if (tag.mesh.material) {
+				tag.mesh.material.color.setHex(sponsorInfo.color);
+				// Add some glow to sponsored tokens
+				tag.mesh.material.emissive = tag.mesh.material.emissive || new THREE.Color();
+				tag.mesh.material.emissive.setHex(0x332200);
+				tag.mesh.material.emissiveIntensity = 0.3;
+			}
+			
+			// Apply size boost - store original scale if not already stored
+			if (!tag.originalScale) {
+				tag.originalScale = tag.mesh.scale.x;
+			}
+			
+			// Apply boosted size
+			tag.mesh.scale.set(boostedSize, boostedSize, boostedSize);
+			
+			// Log sponsorship applied
+			console.log(`Applied sponsorship to ${tokenKey} - size multiplier: ${sponsorInfo.sizeMultiplier.toFixed(2)}x`);
+		} else if (tag.originalColor) {
+			// Restore original color if it was previously sponsored
+			if (tag.mesh.material) {
+				tag.mesh.material.color.setHex(tag.originalColor);
+				// Remove glow
+				tag.mesh.material.emissive.setHex(0x000000);
+				tag.mesh.material.emissiveIntensity = 0;
+			}
+			
+			// Restore original size
+			if (tag.originalScale) {
+				tag.mesh.scale.set(tag.originalScale, tag.originalScale, tag.originalScale);
+			}
+			
+			// Clear stored originals
+			delete tag.originalColor;
+			delete tag.originalScale;
+			
+			console.log(`Removed sponsorship styling from ${tokenKey}`);
+		}
 	}
 	
 	/**
@@ -155,8 +252,24 @@ export class TagCluster {
 			}
 		});
 		
+		// Get sponsored tokens
+		const sponsoredTokens = this.sponsorService.getAllSponsoredTokens();
+		
+		// Add any sponsored tokens not in the list with high priority
+		for (const sponsoredToken of sponsoredTokens) {
+			const { tokenData } = sponsoredToken;
+			const key = getTokenKey(tokenData);
+			
+			// Only add if not already in the new tokens list or existing tokens
+			if (key && !newTokensMap.has(key) && !existingTokensMap.has(key)) {
+				// Add to the beginning to ensure sponsored tokens are added first
+				tokensToAdd.unshift(tokenData);
+				console.log(`Adding sponsored token with priority: ${key}`);
+			}
+		}
+		
 		// Add new tokens dynamically 
-		const tagsToAddLimit = 60; // Add up to 60 on first update, then 2 per update
+		const tagsToAddLimit = this.firstUpdate ? 60 : 2; // Add up to 60 on first update, then 2 per update
 		const tagsToAdd = Math.min(
 			tokensToAdd.length,
 			this.options.maxTags - this.tokenTags.size,
@@ -172,6 +285,12 @@ export class TagCluster {
 				const addedTag = await this.addTokenTag(tokensToAdd[i]);
 				if (addedTag) {
 					console.log(`Successfully added token ${i+1}/${tagsToAdd}: ${addedTag.originalName}`);
+					
+					// Check if it's sponsored and apply styling
+					const tokenKey = getTokenKey(tokensToAdd[i]);
+					if (tokenKey) {
+						this.applySponsorshipStyling(tokenKey);
+					}
 				} else {
 					console.warn(`Failed to add token ${i+1}/${tagsToAdd}`);
 				}
@@ -182,6 +301,9 @@ export class TagCluster {
 		newTokensMap.forEach((token, key) => {
 			if (existingTokensMap.has(key)) {
 				this.updateTokenTag(token);
+				
+				// Check if sponsored and apply styling
+				this.applySponsorshipStyling(key);
 			}
 		});
 		

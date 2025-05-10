@@ -1,12 +1,17 @@
 import * as THREE from 'three';
 //new
 import { LEDDisplay } from './led-display.js';
-import { JetsManager } from './jets.js';
+import { JetsManager } from '../common/jets.js';
 import { ButtonManager } from './buttons.js';
+import { SocialButtonManager } from './social-buttons.js'; // Import the new social button manager
 import { AnimationManager } from './animations.js';
-import { calculateHorizontalSpreadFactor, calculateScaleFactor, clamp, formatCompactNumber, formatPrice, formatChange, getChangeColor } from './utils.js';
-import { createScoreboardStructure, addDecorativeElements } from './createScoreboardStructure.js';
+import { ScoreboardModeManager } from './scoreboard-mode-manager.js'; // Import the new mode manager
+import { ScoreboardDisplayManager } from './scoreboard-display-manager.js'; // Import the new display manager
+import { formatCompactNumber, formatPrice, formatChange, getChangeColor } from './utils.js'; // Token-specific utils
+import { easeInOutQuad, calculateHorizontalSpreadFactor, calculateScaleFactor, clamp } from '../common/utils.js'; // Common utils
+import { createScoreboardStructure, addDecorativeElements, animateCornerBolts, animateCornerBoltsToCorner, animateCornerBoltsToNormalPositions } from '../common/physical-structure.js';
 import * as gsap from 'gsap';
+import { fixBoltPositions, triggerJetEffect } from '../common/physical-effects.js';
 
 /**
  * 3D LED Scoreboard for displaying token data in the sky
@@ -17,13 +22,24 @@ export class TokenScoreboard {
 		this.scene = scene;
 		this.camera = camera;
 		this.dataProvider = dataProvider;
-		this.displayData = [];
 		this.isVisible = true;
-		this.sizeMode = 'hidden'; // Start in hidden mode
+		this.sizeMode = 'hidden'; // Start in hidden mode, will be managed by modeManager after init
 		this.updateInterval = 10000; // Update every 10 seconds
 		this.lastUpdateTime = 0;
 		this.isAnimatingMode = false;
 		this.isPositioningFirst = false;
+		
+		// Store reference to TagManager from scene if available
+		if (scene && scene.userData && scene.userData.tagManager) {
+			console.log("Found TagManager in scene userData");
+			this.tagManager = scene.userData.tagManager;
+		} else if (window.memeCube && window.memeCube.tagsManager) {
+			console.log("Using global memeCube.tagsManager");
+			this.tagManager = window.memeCube.tagsManager.tagManager;
+		} else {
+			console.log("TagManager not found in scene or global scope");
+			this.tagManager = null;
+		}
 		
 		this.updateScreenPositionTimeout = null;
 		this.expandPlanet = null; // New dedicated expand planet
@@ -75,7 +91,7 @@ export class TokenScoreboard {
 		
 		// Token display settings
 		this.maxTokensToShow = 30;
-		this.scrollSpeed = 0.5;  // How fast the display scrolls
+		this.scrollSpeed = 0.7;  // How fast the display scrolls
 		this.scrollPosition = 0;
 		
 		// Movement parameters
@@ -92,7 +108,10 @@ export class TokenScoreboard {
 		// Create subsystems
 		this.ledDisplay = new LEDDisplay(this.scoreboardGroup, this.width -1.2, this.height);
 		this.buttonManager = new ButtonManager(this.scoreboardGroup);
+		this.socialButtonManager = new SocialButtonManager(this.scoreboardGroup); // New dedicated social button manager
 		this.animationManager = new AnimationManager();
+		this.modeManager = new ScoreboardModeManager(this); // Instantiate the mode manager
+		this.displayManager = new ScoreboardDisplayManager(this); // Instantiate display manager
 		
 		// Add to scene
 		this.scene.add(this.scoreboardGroup);
@@ -108,6 +127,9 @@ export class TokenScoreboard {
 		
 		// Create coordinate axes helper for debugging
 		//this.createCoordinateAxesHelper();
+		
+		// Create the dedicated expand planet
+		this.createExpandPlanet();
 		
 		// Store initial width to maintain during animations
 		this.initialWidth = this.width;
@@ -136,15 +158,20 @@ export class TokenScoreboard {
 		this.detailRefreshInterval = 6000; // 6 seconds
 		this.lastDetailRefresh = 0;
 		this.isRefreshingDetail = false;
-		this.changeSizeMode('hidden');
+		this.previousDetailModeForHidden = null; // Store the last detailMode state when hidden
+		this.lastDetailToken = null; // Track the last detail token to detect changes
+		this.lastSocialButtonPositionTime = 0; // Time tracking for social button positioning
+		this.socialButtonPositionInterval = 2000; // Update social button positions every 2 seconds
+		// this.changeSizeMode('hidden'); // Now handled by modeManager or initial state
+		this.modeManager.currentSizeMode = 'hidden'; // Ensure manager starts in hidden
 
 		// Automatically resize to normal after a 1-second delay
 		setTimeout(() => {
 			console.log("Auto-resizing scoreboard to normal mode after delay");
-			this.changeSizeMode('normal');
+			this.modeManager.changeSizeMode('normal'); // Use modeManager
 		}, 7000);
 
-		this.lastModeChangeTime = 0; // Timestamp of last size mode change to prevent double animations
+		// this.lastModeChangeTime = 0; // This might become redundant if fully managed by modeManager
 	}
 	
 	/**
@@ -173,6 +200,9 @@ export class TokenScoreboard {
 			
 			// Update position to center horizontally if needed
 			this._updateScreenPosition();
+			
+			// Force social button position update on resize
+			this.updateSocialButtonPositionsIfNeeded(true);
 			
 			// Clear the timeout reference
 			this.updateScreenPositionTimeout = null;
@@ -228,7 +258,7 @@ export class TokenScoreboard {
 		
 		// Get actual pixel width for more accurate decisions
 		const actualPixelWidth = window.innerWidth || 1200;
-		console.log(`Actual screen width: ${actualPixelWidth}px, FOV width: ${viewWidth.toFixed(2)}`);
+		// console.log(`Actual screen width: ${actualPixelWidth}px, FOV width: ${viewWidth.toFixed(2)}`);
 		
 		// Hard pixel width thresholds for different screen sizes
 		const isVeryNarrowScreen = actualPixelWidth < 600;  // Mobile phones
@@ -266,18 +296,18 @@ export class TokenScoreboard {
 		if (isVeryNarrowScreen || isNarrowScreen) {
 			// Center horizontally on narrow screens
 			this.screenPosition.x = 0;
-			console.log(isVeryNarrowScreen ? 
-				`Very narrow screen (${actualPixelWidth}px), centering and scaling` : 
-				`Narrow screen (${actualPixelWidth}px), centering horizontally`);
+			// console.log(isVeryNarrowScreen ? 
+			// 	`Very narrow screen (${actualPixelWidth}px), centering and scaling` : 
+			// 	`Narrow screen (${actualPixelWidth}px), centering horizontally`);
 		} else if (isMediumScreen) {
 			// For medium-width screens (750-900px), use a less extreme left position
 			const mediumOffset = -0.25; // Moved further left from -0.2
 			this.screenPosition.x = mediumOffset;
-			console.log(`Medium screen width (${actualPixelWidth}px), using moderate left position: ${mediumOffset}`);
+			// console.log(`Medium screen width (${actualPixelWidth}px), using moderate left position: ${mediumOffset}`);
 		} else {
 			// Standard left alignment on wider screens, but not as far left
 			this.screenPosition.x = -0.5; // Moved further left from -0.4
-			console.log(`Normal screen width (${actualPixelWidth}px), positioning to the left`);
+			// console.log(`Normal screen width (${actualPixelWidth}px), positioning to the left`);
 		}
 		
 		// Calculate target position relative to camera
@@ -371,9 +401,8 @@ export class TokenScoreboard {
 						return;
 					}
 					
-					// Keep social buttons visible
-					if (this.buttonManager.socialButtons && 
-						this.buttonManager.socialButtons.some(btn => obj === btn || (obj.parent && obj.parent === btn))) {
+					// Keep social buttons visible (use SocialButtonManager to check)
+					if (this.socialButtonManager && this.socialButtonManager.isButtonObject(obj)) {
 						obj.visible = true;
 						return;
 					}
@@ -426,105 +455,212 @@ export class TokenScoreboard {
 				this.expandPlanet.visible = false;
 			}
 			
-			// CRITICAL FIX: In detail mode, make sure social buttons are properly repositioned
-			if (this.detailMode && this.buttonManager) {
-				this._positionSocialButtonsAboveScoreboard();
+		}
+	}
+
+	updateSocialButtonColors(token) {
+		if (this.socialButtonManager) {
+			// Force grey buttons if not in detail mode
+			if (!this.detailMode) {
+				console.log("Not in detail mode - forcing all social buttons to grey");
+				// Pass empty object to make sure all buttons are grey
+				this.socialButtonManager.updateButtonColors({});
+			} else if (token) {
+				console.log("Detail mode with token - updating social button colors");
+				this.socialButtonManager.updateButtonColors(token);
+			} else {
+				console.log("Detail mode with no token - setting social buttons to grey");
+				this.socialButtonManager.updateButtonColors({});
 			}
 		}
 	}
-	
 	/**
-	 * Handle interaction with the scoreboard
-	 * @param {THREE.Raycaster} raycaster - Raycaster for interaction
-	 * @returns {boolean} Whether interaction occurred
+	 * Handle user interaction with the scoreboard
+	 * @param {THREE.Raycaster} raycaster - The raycaster for detecting intersections
 	 */
 	handleInteraction(raycaster) {
-		if (!this.isVisible) return false;
-
-		// Check for interaction with the dedicated expand planet first in hidden mode
-		if (this.sizeMode === 'hidden' && this.expandPlanet && this.expandPlanet.visible) {
-			const planetIntersects = raycaster.intersectObject(this.expandPlanet, true);
-			if (planetIntersects.length > 0) {
-				console.log("Expand planet clicked in hidden mode");
+		// Check for button clicks first - they have priority
+		if (this.buttonManager) {
+			const buttonClicked = this.buttonManager.handleInteraction(raycaster, (action) => {
+				console.log(`Button action received: ${action}, current mode: ${this.sizeMode}`);
+				if (action === 'expand') {
+					// Expand should only work from normal or hidden
+					if (this.sizeMode === 'normal') {
+						this.changeSizeMode('tall');
+					} else if (this.sizeMode === 'hidden') {
+						this.changeSizeMode('normal');
+					}
+				} else if (action === 'collapse') {
+					// Collapse should go tall -> normal, or normal -> hidden
+					if (this.sizeMode === 'tall') {
+						this.changeSizeMode('normal'); // FIXED: Tall mode collapse goes to normal
+					} else if (this.sizeMode === 'normal') {
+						this.changeSizeMode('hidden'); 
+					}
+				} else if (action === 'exit') {
+					// Exit always works if in detail mode
+					if (this.detailMode) {
+						this.exitTokenDetail();
+					}
+				}
+			});
+			if (buttonClicked) return true; // Stop if a button was clicked
+		}
+		
+		// NEW: Check for social button clicks using the dedicated social button manager
+		if (this.socialButtonManager) {
+			const socialButtonClicked = this.socialButtonManager.isButtonObject(raycaster.intersectObject(this.scene, true)[0]?.object);
+			if (socialButtonClicked) {
+				const buttonObject = raycaster.intersectObject(this.scene, true)[0].object;
+				const action = buttonObject.userData?.action || buttonObject.parent?.userData?.action;
+				if (action) {
+					this.handleSocialMediaClick(action);
+					return true;
+				}
+			}
+		}
+		
+		// Check if in detail mode and clicked on empty space
+		if (this.detailMode) {
+			const intersects = raycaster.intersectObject(this.scoreboardGroup, true);
+			if (intersects.length === 0) {
+				// Clicked on empty space while in detail mode - exit detail mode
+				console.log("Clicked on empty space, exiting token detail mode");
+				this.exitTokenDetail();
+				return true;
+			}
+		}
+		
+		// NEW: Check if a click happened on or near the LED display
+		if (!this.detailMode && this.ledDisplay && this.displayManager) {
+			// Create or update a larger hit area for the LED display
+			if (!this.ledHitPlane) {
+				const hitPlaneGeometry = new THREE.PlaneGeometry(this.width * 1.2, this.height * 1.2);
+				const hitPlaneMaterial = new THREE.MeshBasicMaterial({
+					color: 0x000000,
+					transparent: true,
+					opacity: 0.0,
+					side: THREE.DoubleSide
+				});
+				this.ledHitPlane = new THREE.Mesh(hitPlaneGeometry, hitPlaneMaterial);
+				this.ledHitPlane.position.set(0, 0, -0.1); // Slightly behind the LEDs
+				this.ledHitPlane.userData = {
+					isLEDHitPlane: true
+				};
+				this.ledDisplay.ledGroup.add(this.ledHitPlane);
+			}
+			
+			const intersects = raycaster.intersectObject(this.scoreboardGroup, true);
+			if (intersects.length > 0) {
+				// Check if we hit the LED display or its hit plane
+				let ledHit = false;
+				let ledHitObject = null;
+				let hitPosition = null;
+				
+				// Look for the LED display or hit plane in the intersects
+				for (const hit of intersects) {
+					// Check if hit.object is part of the LED display, has isLED flag, or is the hit plane
+					if (hit.object.parent === this.ledDisplay.ledGroup || 
+						hit.object.userData?.isLED === true || 
+						hit.object.userData?.isLEDHitPlane === true) {
+						ledHit = true;
+						ledHitObject = hit.object;
+						hitPosition = hit.point;
+						break;
+					}
+				}
+				
+				if (ledHit && ledHitObject) {
+					// If we hit the plane or an LED, calculate the approximate row and column
+					if (!ledHitObject.userData || (!ledHitObject.userData.row && !ledHitObject.userData.isLEDHitPlane)) {
+						console.log("LED hit area clicked but has no userData");
+						return false;
+					}
+					
+					let row, col;
+					if (ledHitObject.userData.isLEDHitPlane) {
+						// Convert world position to local LED display coordinates
+						const localPos = this.ledDisplay.ledGroup.worldToLocal(hitPosition.clone());
+						const totalWidth = this.width * 0.98;
+						const totalHeight = this.height * 0.95;
+						const startX = -totalWidth / 2 + this.ledDisplay.dotSpacing / 2 - 1.2;
+						const startY = -totalHeight / 1.88;
+						
+						// Calculate approximate row and column based on position
+						col = Math.floor((localPos.x - startX) / (this.ledDisplay.dotSpacing * 0.9));
+						row = Math.floor((localPos.y - startY) / (this.ledDisplay.dotSpacing * 0.88));
+						
+						// Clamp to valid range
+						row = Math.max(0, Math.min(row, this.ledDisplay.dotRows - 1));
+						col = Math.max(0, Math.min(col, this.ledDisplay.dotCols - 1));
+						console.log(`LED hit plane clicked at approximate row ${row}, col ${col}`);
+					} else {
+						row = ledHitObject.userData.row;
+						col = ledHitObject.userData.col;
+						console.log(`LED dot clicked at row ${row}, col ${col}`);
+					}
+					
+					if (row !== undefined && col !== undefined) {
+						// Check if this position corresponds to a token
+						const clickedToken = this.displayManager.findTokenAtPosition(row, col);
+						if (clickedToken) {
+							console.log(`Clicked on token: ${clickedToken.baseToken?.symbol || 'Unknown'}`);
+							
+							// Highlight the token in the tag cube if we have access to it
+							if (this.tagManager) {
+								const address = clickedToken.tokenAddress;
+								if (address) {
+									console.log(`Highlighting token with address: ${address}`);
+									this.tagManager.highlightToken(address);
+								}
+							} else if (this.scene && this.scene.userData && this.scene.userData.tagManager) {
+								const address = clickedToken.tokenAddress;
+								if (address) {
+									console.log(`Highlighting token with address: ${address}`);
+									this.scene.userData.tagManager.highlightToken(address);
+								}
+							}
+							
+							// Show token detail view
+							this.showTokenDetail(clickedToken);
+							return true;
+						} else {
+							console.log("No token found at click position");
+						}
+					} else {
+						console.log("LED hit but row/col undefined");
+					}
+				}
+			}
+		}
+		
+		// Normal token selection logic when not in detail mode
+		if (!this.detailMode && this.visible) {
+			const intersects = raycaster.intersectObject(this.scoreboardGroup, true);
+			if (intersects.length > 0) {
+				const clickedObject = intersects[0].object;
+				
+				// Check if clicked on a token row
+				const tokenIndex = this._findTokenIndexFromObject(clickedObject);
+				if (tokenIndex >= 0 && tokenIndex < this.tokens.length) {
+					const clickedToken = this.tokens[tokenIndex];
+					console.log(`Clicked token: ${clickedToken.symbol}`);
+					this.showTokenDetail(clickedToken);
+					return true;
+				}
+			}
+		}
+			
+		// Check if clicked on dedicated expand planet in hidden mode
+		if (this.sizeMode === 'hidden' && this.expandPlanet) {
+			const intersects = raycaster.intersectObject(this.expandPlanet.userData.expandSphere, true);
+			if (intersects.length > 0) {
+				console.log("Clicked dedicated expand planet, changing to normal mode");
 				this.changeSizeMode('normal');
 				return true;
 			}
 		}
-
-		// Find any intersections with scoreboard's interactive parts
-		const intersects = raycaster.intersectObject(this.scoreboardGroup, true);
-		if (intersects.length > 0) {
-			// In hidden mode, we only want to handle expand button interactions
-			if (this.sizeMode === 'hidden') {
-				// Check if the intersection is with the expand button or any of its children
-				const expandButtonIntersection = intersects.find(intersection => {
-					const obj = intersection.object;
-					
-					// Check if the object is part of the expand button hierarchy
-					let currentObj = obj;
-					while (currentObj) {
-						if (currentObj === this.buttonManager.expandButton) {
-							return true;
-						}
-						currentObj = currentObj.parent;
-					}
-					
-					return false;
-				});
-				
-				if (expandButtonIntersection) {
-					console.log("Expand button clicked in hidden mode");
-					// In hidden mode, expand button always changes to normal mode
-					this.changeSizeMode('normal');
-					return true;
-				}
-				
-				return false;
-			}
-			
-			// Normal interaction handling for other modes
-			return this.buttonManager.handleInteraction(raycaster, (action) => {
-				console.log("Button clicked:", action);
-				
-				if (action === 'expand') {
-					if (this.sizeMode === 'normal') {
-						this.changeSizeMode('tall');
-						return true;
-					} else if (this.sizeMode === 'hidden') {
-						this.changeSizeMode('normal');
-						return true;
-					}
-				} else if (action === 'collapse') {
-					if (this.sizeMode === 'tall') {
-						this.changeSizeMode('normal');
-						return true;
-					} else if (this.sizeMode === 'normal') {
-						this.changeSizeMode('hidden');
-						return true;
-					}
-				} else if (action === 'exit') {
-					// Exit detail mode
-					if (this.detailMode) {
-						console.log('Exiting token detail mode via exit button');
-						this.exitTokenDetail();
-						return true;
-					}
-				} else if (action === 'twitter') {
-					// Open Twitter/X link if available
-					this.handleSocialMediaClick('twitter');
-					return true;
-				} else if (action === 'discord') {
-					// Open Discord link if available
-					this.handleSocialMediaClick('discord');
-					return true;
-				} else if (action === 'url') {
-					// Open project URL if available
-					this.handleSocialMediaClick('url');
-					return true;
-				}
-				return false;
-			});
-		}
+		
 		return false;
 	}
 	
@@ -568,31 +704,72 @@ export class TokenScoreboard {
 				this.detailToken.links?.website ||
 				this.detailToken.explorer;
 			
-			// If we have an address but no website, create an explorer link
-			if (!url && this.detailToken.tokenAddress) {
-				// Use chain-appropriate explorer
-				const chainId = this.detailToken.chainId;
+			// // If we have an address but no website, create an explorer link
+			// if (!url && this.detailToken.tokenAddress) {
+			// 	// Use chain-appropriate explorer
+			// 	const chainId = this.detailToken.chainId;
 				
-				if (chainId === 1) { // Ethereum mainnet
-					url = `https://etherscan.io/token/${this.detailToken.tokenAddress}`;
-				} else if (chainId === 56) { // Binance Smart Chain
-					url = `https://bscscan.com/token/${this.detailToken.tokenAddress}`;
-				} else if (chainId === 42161) { // Arbitrum
-					url = `https://arbiscan.io/token/${this.detailToken.tokenAddress}`;
-				} else if (chainId === 10) { // Optimism
-					url = `https://optimistic.etherscan.io/token/${this.detailToken.tokenAddress}`;
-				} else if (chainId === 137) { // Polygon
-					url = `https://polygonscan.com/token/${this.detailToken.tokenAddress}`;
-				} else if (chainId === 8453) { // Base
-					url = `https://basescan.org/token/${this.detailToken.tokenAddress}`;
-				} else {
-					// Generic fallback to Etherscan
-					url = `https://etherscan.io/token/${this.detailToken.tokenAddress}`;
+			// 	if (chainId === 1) { // Ethereum mainnet
+			// 		url = `https://etherscan.io/token/${this.detailToken.tokenAddress}`;
+			// 	} else if (chainId === 56) { // Binance Smart Chain
+			// 		url = `https://bscscan.com/token/${this.detailToken.tokenAddress}`;
+			// 	} else if (chainId === 42161) { // Arbitrum
+			// 		url = `https://arbiscan.io/token/${this.detailToken.tokenAddress}`;
+			// 	} else if (chainId === 10) { // Optimism
+			// 		url = `https://optimistic.etherscan.io/token/${this.detailToken.tokenAddress}`;
+			// 	} else if (chainId === 137) { // Polygon
+			// 		url = `https://polygonscan.com/token/${this.detailToken.tokenAddress}`;
+			// 	} else if (chainId === 8453) { // Base
+			// 		url = `https://basescan.org/token/${this.detailToken.tokenAddress}`;
+			// 	} else {
+			// 		// Generic fallback to Etherscan
+			// 		url = `https://etherscan.io/token/${this.detailToken.tokenAddress}`;
+			// 	}
+			// 	hasLink = true; // We created an explorer link
+			// 	console.log(`No website link found, creating explorer link for address ${this.detailToken.tokenAddress}`);
+			// } else {
+				
+			// }
+
+			hasLink = !!url;
+		} else if (platform === 'dexscreener') {
+			// For Dexscreener, we need the token address
+			if (this.detailToken.tokenAddress) {
+				const chainId = this.detailToken.chainId || 1; // Default to Ethereum if not specified
+				
+				// Format: https://dexscreener.com/ethereum/0x...
+				let chainName = 'ethereum'; // Default
+				
+				// Map chain IDs to Dexscreener URL paths
+				switch (chainId) {
+					case 1: 
+						chainName = 'ethereum'; 
+						break;
+					case 56: 
+						chainName = 'bsc'; 
+						break;
+					case 42161: 
+						chainName = 'arbitrum'; 
+						break;
+					case 10: 
+						chainName = 'optimism'; 
+						break;
+					case 137: 
+						chainName = 'polygon'; 
+						break;
+					case 8453: 
+						chainName = 'base'; 
+						break;
+					case 43114: 
+						chainName = 'avalanche'; 
+						break;
 				}
-				hasLink = true; // We created an explorer link
-				console.log(`No website link found, creating explorer link for address ${this.detailToken.tokenAddress}`);
+				
+				url = `https://dexscreener.com/${chainName}/${this.detailToken.tokenAddress}`;
+				hasLink = true;
+				console.log(`Creating Dexscreener link for token address ${this.detailToken.tokenAddress}`);
 			} else {
-				hasLink = !!url;
+				hasLink = false;
 			}
 		}
 		
@@ -614,21 +791,17 @@ export class TokenScoreboard {
 	 * @private
 	 */
 	_flashSocialButtonNoLink(platform) {
-		if (!this.buttonManager || !this.buttonManager.socialButtons) return;
+		// NEW: Use dedicated social button manager
+		if (!this.socialButtonManager) return;
 		
 		// Determine which button to flash
-		let buttonIndex = -1;
-		if (platform === 'twitter') buttonIndex = 0;
-		else if (platform === 'discord') buttonIndex = 1;
-		else if (platform === 'url') buttonIndex = 2;
+		let button = null;
+		if (platform === 'twitter') button = this.socialButtonManager.twitterButton;
+		else if (platform === 'discord') button = this.socialButtonManager.discordButton;
+		else if (platform === 'url') button = this.socialButtonManager.urlButton;
+		else if (platform === 'dexscreener') button = this.socialButtonManager.dexscreenerButton;
 		
-		if (buttonIndex === -1 || !this.buttonManager.socialButtons[buttonIndex]) return;
-		
-		const button = this.buttonManager.socialButtons[buttonIndex];
-		
-		// Save original color
-		const originalColor = 0x888888; // Grey (inactive)
-		const originalOpacity = 0.6;
+		if (!button) return;
 		
 		// Create informative console message based on platform
 		let message = '';
@@ -644,16 +817,19 @@ export class TokenScoreboard {
 			if (this.detailToken.tokenAddress) {
 				message += `. You can manually search for address ${this.detailToken.tokenAddress.substring(0, 10)}... on a blockchain explorer.`;
 			}
+		} else if (platform === 'dexscreener') {
+			message = `No token address found for ${this.detailToken.baseToken?.symbol || 'token'} to create Dexscreener link`;
 		}
 		
 		console.log(message);
 		
-		// Flash red
-		this._setSocialButtonColor(button, 0xFF0000, 1.0); // Bright red
+		// Flash red by temporarily setting button color to red
+		this.socialButtonManager.flashButtonRed(platform); 
 		
-		// Return to grey after a short delay
+		// Return to default color after a short delay
 		setTimeout(() => {
-			this._setSocialButtonColor(button, originalColor, originalOpacity);
+			// Reset to grey (inactive)
+			this.socialButtonManager.setButtonColor(button, 0x888888);
 		}, 300);
 	}
 	
@@ -662,143 +838,7 @@ export class TokenScoreboard {
 	 * @param {string} mode - The new size mode ('normal', 'tall', 'hidden')
 	 */
 	changeSizeMode(mode) {
-		// Prevent rapid or duplicate size mode changes within 1 second
-		const now = performance.now();
-		if (now - (this.lastModeChangeTime || 0) < 1000) {
-			console.log(`Ignoring size mode change to ${mode} – called too soon after previous change.`);
-			return;
-		}
-		this.lastModeChangeTime = now;
-		
-		console.log(`Changing size mode to: ${mode}`);
-		if (this.sizeMode === mode) return;
-		
-		// Always fix bolt positions before starting any mode transition
-		// This ensures we start from a good state
-		this.fixBoltPositions();
-		
-		// Store the previous mode to handle transitions correctly
-		const previousMode = this.sizeMode;
-		this.sizeMode = mode;
-		
-		// ENHANCED BURST EFFECT: Configure burst origin for more dramatic appearance
-		// Make it active for hidden/small -> normal/tall mode changes
-		this._burstFromOrigin = (previousMode === 'hidden' || previousMode === 'small') && 
-			(mode === 'normal' || mode === 'tall');
-		
-		// Calculate a better burst origin position if we're doing a burst effect
-		if (this._burstFromOrigin) {
-			// Create a center point slightly toward the camera for better visibility
-			this._burstOriginPoint = new THREE.Vector3(0, 0, -0.5);
-			
-			// Pre-position bolts at burst origin if we're doing a burst effect
-			// This creates a more dramatic start to the animation
-			if (this.cornerBolts) {
-				this.cornerBolts.forEach(bolt => {
-					// Make bolt visible first
-					bolt.visible = true;
-					if (bolt.userData.plate) {
-						bolt.userData.plate.visible = true;
-					}
-					
-					// Position at burst origin
-					bolt.position.copy(this._burstOriginPoint);
-					
-					// If plates exist, position them too
-					if (bolt.userData.plate) {
-						bolt.userData.plate.position.copy(this._burstOriginPoint);
-						// Offset plate slightly behind the bolt
-						bolt.userData.plate.position.z += 0.1;
-					}
-				});
-				
-				// Force sync jets with the burst origin position
-				if (this.jetsManager) {
-					this.jetsManager.syncJetsWithBolts(true);
-					
-					// Pre-emit some particles to make the burst more visible
-					this.triggerJetEffect(1.5, true); // Enable burst effect
-				}
-			}
-		}
-		
-		// Explicitly ensure LED display visibility when changing from hidden to normal/tall
-		if (previousMode === 'hidden' && (mode === 'normal' || mode === 'tall')) {
-			if (this.ledDisplay && this.ledDisplay.ledGroup) {
-				console.log('Explicitly setting LED display to visible for normal/tall mode');
-				this.ledDisplay.ledGroup.visible = true;
-			} else {
-				console.warn('LED display or ledGroup not found when trying to make visible');
-			}
-			
-			// Extra debug check for buttons
-			if (this.buttonManager) {
-				console.log('Button manager exists, checking buttons:');
-				console.log('- expandButton:', !!this.buttonManager.expandButton);
-				console.log('- collapseButton:', !!this.buttonManager.collapseButton);
-				
-				if (this.buttonManager.expandButton) {
-					this.buttonManager.expandButton.visible = true;
-					console.log('Set expandButton.visible = true');
-				}
-				if (this.buttonManager.collapseButton) {
-					this.buttonManager.collapseButton.visible = true;
-					console.log('Set collapseButton.visible = true');
-				}
-			} else {
-				console.warn('Button manager not found when trying to show buttons');
-			}
-		}
-		
-		// For transitions to hidden mode, ensure the expand planet is properly positioned
-		if (mode === 'hidden') {
-			if (this.expandPlanet) {
-				this.expandPlanet.visible = true;
-				this._positionExpandPlanetBottomRight();
-			}
-			// Make absolutely sure all bolts and their plates are hidden
-			if (this.cornerBolts) {
-				this.cornerBolts.forEach(bolt => {
-					bolt.visible = false;
-					if (bolt.userData?.plate) bolt.userData.plate.visible = false;
-				});
-			}
-		}
-		
-		this.updateScoreboardDimensions();
-		
-		// Ensure buttons are updated dynamically, especially when coming from hidden mode
-		if (mode === 'normal' && this.buttonManager) {
-			this.buttonManager.updateButtonPositions(this.width, this.height, mode, this.detailMode);
-			this.buttonManager.updateButtonColors(mode);
-			// Reset material properties to ensure visibility settings are correct
-			[this.buttonManager.expandButton, this.buttonManager.collapseButton, this.buttonManager.urlButton].forEach(button => {
-				if (button) {
-					button.traverse(obj => {
-						if (obj.material) {
-							obj.material.depthTest = true; // Reset to default
-							obj.material.renderOrder = 15; // Reset to standard button render order
-						}
-					});
-				}
-			});
-		}
-		
-		// Fix bolt positions again before starting animation
-		if (!this._burstFromOrigin) {
-			this.fixBoltPositions();
-		}
-		
-		// Animate the change in scoreboard dimensions
-		this.positionAndExpandScoreboard();
-		
-		// Save the mode to local storage to persist across sessions
-		try {
-			localStorage.setItem('scoreboardSizeMode', mode);
-			console.log(`Saved size mode ${mode} to local storage`);
-		} catch (e) {
-			console.error('Failed to save size mode to local storage:', e);
-		}
+		this.modeManager.changeSizeMode(mode);
 	}
 	
 	/**
@@ -944,7 +984,7 @@ export class TokenScoreboard {
 				}
 				
 				// Start the corner bolts animation to expand height
-				this.animationManager.animateCornerBolts(
+				animateCornerBolts(
 					this.cornerBolts,
 					this.sizeMode === 'tall', // True if tall mode
 					this.startHeight,
@@ -1012,7 +1052,7 @@ export class TokenScoreboard {
 					}
 					
 					// Start the height animation
-					this.animationManager.animateCornerBolts(
+					animateCornerBolts(
 						this.cornerBolts,
 						false, // Not tall mode
 						this.height,
@@ -1058,7 +1098,7 @@ export class TokenScoreboard {
 				}, 100); // Short delay for visual effect
 			} else {
 				// Normal animation for other transitions
-				this.animationManager.animateCornerBolts(
+				animateCornerBolts(
 					this.cornerBolts,
 					this.sizeMode === 'tall', // True if tall mode
 					this.startHeight || this.height,
@@ -1096,127 +1136,18 @@ export class TokenScoreboard {
 	}
 	
 	/**
-	 * Trigger a visual jet effect from the bolts
-	 * @param {number} intensity - Optional intensity multiplier (0.0-1.0)
-	 * @param {boolean} isBurstEffect - Whether this is part of a burst effect animation
+	 * Trigger a jet effect for visual feedback
+	 * @param {number} intensity - Intensity factor for the jet effect (0.0-1.0+)
+	 * @param {boolean} isBurstEffect - Whether to create a star-like burst pattern
 	 */
 	triggerJetEffect(intensity = 1.0, isBurstEffect = false) {
-		if (!this.jetsManager || !this.cornerBolts || this.cornerBolts.length < 4) return;
-		
-		console.log(`Triggering jet effect with intensity ${intensity}${isBurstEffect ? ' (burst effect)' : ''}`);
-		
-		// First force sync jets with bolts to ensure proper positioning
-		this.jetsManager.syncJetsWithBolts(true);
-		
-		// Create random movement vectors for each corner
-		this.cornerBolts.forEach((bolt, index) => {
-			// Skip if bolt isn't visible
-			if (!bolt.visible) {
-				console.log("Bolt is not visible, skipping jet effect");
-				return;
-			}
-			
-			// Find the matching jet for this bolt
-			const jet = this.jetsManager.jets[index];
-			if (!jet) {
-				console.log(`No matching jet found for bolt ${index}`);
-				return;
-			}
-			
-			// CRITICAL FIX: Ensure jet base position matches bolt position
-			// Use direct position access as both objects are in the same coordinate space
-			jet.basePosition.copy(bolt.position);
-			
-			// For burst effects, create more dramatic particle distribution
-			if (isBurstEffect) {
-				// Create multiple directional bursts for a star-like pattern
-				for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
-					const spread = 0.3 + Math.random() * 0.2;
-					
-					// Create directional burst with slight z-back component
-					const burstDir = new THREE.Vector3(
-						Math.cos(angle) * spread,
-						Math.sin(angle) * spread,
-						-0.7 * intensity
-					).normalize();
-					
-					// Emit particles along this direction
-					const particleCount = Math.ceil(10 * intensity);
-					for (let i = 0; i < particleCount; i++) {
-						this.jetsManager.emitJetParticle(jet, burstDir, intensity * 2.0);
-					}
-				}
-				
-				// Add additional particles in random directions
-				for (let i = 0; i < 30 * intensity; i++) {
-					const randomDir = new THREE.Vector3(
-						(Math.random() - 0.5) * 2,
-						(Math.random() - 0.5) * 2,
-						-0.8 * intensity
-					).normalize();
-					
-					this.jetsManager.emitJetParticle(jet, randomDir, intensity * 1.5);
-				}
-			} 
-			else {
-				// Standard particle emission pattern for normal effects
-				// Create a random movement direction with strong backwards component
-				const moveDir = new THREE.Vector3(
-					(Math.random() - 0.5) * 0.4,   // Wider horizontal spread
-					(Math.random() - 0.5) * 0.4,   // Wider vertical spread
-					(Math.random() - 0.5) * 0.2 - 0.8 * intensity // Strong backward Z component
-				);
-				
-				// Emit particles directly - more particles for higher visibility
-				const particleCount = Math.ceil(30 * intensity); // Increased from 20
-				for (let i = 0; i < particleCount; i++) {
-					this.jetsManager.emitJetParticle(jet, moveDir, intensity * 2.0); // Double intensity
-				}
-			}
+		// Use the common implementation from physical-effects.js
+		return triggerJetEffect({
+			jetsManager: this.jetsManager,
+			cornerBolts: this.cornerBolts,
+			intensity,
+			isBurstEffect
 		});
-		
-		// Update last movement time to prevent immediate fade
-		if (this.jetsManager) {
-			this.jetsManager.lastMovementTime = performance.now();
-		}
-		
-		// Schedule multiple echo effects for better visibility and longer duration
-		if (intensity > 0.3) {
-			// Create 3 echo effects with decreasing intensity and ensure sync on each echo
-			for (let i = 1; i <= 3; i++) {
-				setTimeout(() => {
-					// Re-sync jets and bolts before each echo effect
-					this.jetsManager.syncJetsWithBolts(true);
-					
-					// Create the echo effect
-					this.cornerBolts.forEach((bolt, index) => {
-						if (!bolt.visible) return;
-						
-						const jet = this.jetsManager.jets[index];
-						if (!jet) return;
-						
-						// CRITICAL FIX: Ensure jet base position matches bolt position
-						jet.basePosition.copy(bolt.position);
-						
-						// Create echo direction vector
-						const echoDir = new THREE.Vector3(
-							(Math.random() - 0.5) * 0.3,
-							(Math.random() - 0.5) * 0.3,
-							-0.6 * (1 - i * 0.2) * intensity
-						);
-						
-						// Emit fewer particles for echo effects
-						const echoCount = Math.ceil(15 * intensity * (1 - i * 0.2));
-						for (let j = 0; j < echoCount; j++) {
-							this.jetsManager.emitJetParticle(jet, echoDir, intensity * (1 - i * 0.2));
-						}
-					});
-					
-					// Update last movement time to prevent fade
-					this.jetsManager.lastMovementTime = performance.now();
-				}, i * 150); // Spread out over time
-			}
-		}
 	}
 	
 	/**
@@ -1452,38 +1383,31 @@ export class TokenScoreboard {
 					});
 				}
 				
-				// Hide all other buttons except in detail mode
+				// Hide all other buttons except needed for detail mode
 				if (this.buttonManager.collapseButton) {
 					this.buttonManager.collapseButton.visible = false;
 				}
 				if (this.buttonManager.exitButton && !this.detailMode) {
 					this.buttonManager.exitButton.visible = false;
 				} else if (this.buttonManager.exitButton && this.detailMode) {
+					// Make sure exit button is visible in detail mode
 					this.buttonManager.exitButton.visible = true;
 				}
 				
-				// CRITICAL FIX: Don't hide social buttons in detail mode
-				if (!this.detailMode) {
-					this.buttonManager.socialButtons.forEach(btn => {
-						if (btn) btn.visible = false;
-					});
-				} else {
-					// In detail mode, make social buttons visible and position correctly
-					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-					this._positionSocialButtonsAboveScoreboard();
-				}
+
 			} else {
 				// For normal and tall modes, use the standard button positioning
 				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
-				
-				// CRITICAL FIX: In detail mode, ensure social buttons are positioned above
-				if (this.detailMode) {
-					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-					this._positionSocialButtonsAboveScoreboard();
-				}
-			}
 			
-			// Special handling for hidden mode - ensure only expand button is visible
+			}
+			if (this.socialButtonManager) {
+				this.socialButtonManager.positionButtonsAbove(this.width, this.height, 0);
+
+				this.updateSocialButtonColors(this.detailToken);
+			}
+
+			
+			// Special handling for hidden mode - with exception for detail mode
 			if (this.sizeMode === 'hidden') {
 				// Hide every bolt and its plate completely
 				if (this.cornerBolts) {
@@ -1507,6 +1431,13 @@ export class TokenScoreboard {
 							return;
 						}
 						
+						// Keep social buttons visible
+						if (this.socialButtonManager && this.socialButtonManager.buttonList.some(btn => 
+							obj === btn || (obj.parent && obj.parent === btn))) {
+							obj.visible = true;
+							return;
+						}
+						
 						// Hide everything else
 						obj.visible = false;
 					});
@@ -1526,8 +1457,8 @@ export class TokenScoreboard {
 							return;
 						}
 						
-						// Keep social buttons visible in detail mode
-						if (this.buttonManager && this.buttonManager.socialButtons.some(btn => 
+						// Keep social buttons visible
+						if (this.socialButtonManager && this.socialButtonManager.buttonList.some(btn => 
 							obj === btn || (obj.parent && obj.parent === btn))) {
 							obj.visible = true;
 							return;
@@ -1536,9 +1467,6 @@ export class TokenScoreboard {
 						// Hide everything else
 						obj.visible = false;
 					});
-					
-					// Reposition social buttons
-					this._positionSocialButtonsAboveScoreboard();
 				}
 			}
 		}
@@ -1720,26 +1648,15 @@ export class TokenScoreboard {
 					this.buttonManager.exitButton.visible = true;
 				}
 				
-				// CRITICAL FIX: Don't hide social buttons in detail mode
-				if (!this.detailMode) {
-					this.buttonManager.socialButtons.forEach(btn => {
-						if (btn) btn.visible = false;
-					});
-				} else if (this.detailMode) {
-					// In detail mode, make sure social buttons are visible
-					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-					this._positionSocialButtonsAboveScoreboard();
-				}
+
+				this.socialButtonManager.positionButtonsAbove(this.width, this.height, 0); 
+				
 			} else {
 				// For normal and tall modes, use the standard button positioning
 				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
-				
-				// CRITICAL FIX: In detail mode, reposition social buttons above scoreboard
-				if (this.detailMode) {
-					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-					this._positionSocialButtonsAboveScoreboard();
-				}
+			
 			}
+
 			
 			// Special handling for hidden mode - with exception for detail mode
 			if (this.sizeMode === 'hidden' && !this.detailMode) {
@@ -1750,7 +1667,7 @@ export class TokenScoreboard {
 					
 					// Skip expand button
 					if (this.buttonManager && (
-						obj === this.buttonManager.expandButton || 
+						obj === this.buttonManager.expandButton ||
 						(obj.parent && obj.parent === this.buttonManager.expandButton))) {
 						obj.visible = true;
 						return;
@@ -1759,70 +1676,14 @@ export class TokenScoreboard {
 					// Hide everything else
 					obj.visible = false;
 				});
-			} else if (this.sizeMode === 'hidden' && this.detailMode) {
-				// In detail mode with hidden scoreboard, keep social buttons and exit button visible
-				this.scoreboardGroup.traverse(obj => {
-					// Skip the group itself
-					if (obj === this.scoreboardGroup) return;
-					
-					// Keep expand and exit buttons visible
-					if (this.buttonManager && (
-						obj === this.buttonManager.expandButton || 
-						(obj.parent && obj.parent === this.buttonManager.expandButton) ||
-						obj === this.buttonManager.exitButton ||
-						(obj.parent && obj.parent === this.buttonManager.exitButton))) {
-						obj.visible = true;
-						return;
-					}
-					
-					// Keep social buttons visible in detail mode
-					if (this.buttonManager && this.buttonManager.socialButtons.some(btn => 
-						obj === btn || (obj.parent && obj.parent === btn))) {
-						obj.visible = true;
-						return;
-					}
-					
-					// Hide everything else
-					obj.visible = false;
-				});
-				
-				// Reposition social buttons
-				this._positionSocialButtonsAboveScoreboard();
-			}
-		}
-		
-		// Hide LEDDisplay in hidden mode, update dimensions otherwise
-		if (this.ledDisplay) {
-			if (this.sizeMode === 'hidden') {
-				// Hide LED display entirely in hidden mode
-				if (this.ledDisplay.ledGroup) {
-					this.ledDisplay.ledGroup.visible = false;
-				}
-			} else if (!this.isAnimatingMode) {
-				// Calculate previous and new dot rows to detect major changes
-				const previousDotRows = this.ledDisplay.dotRows;
-				
-				// Dynamically calculate dot rows to fill the available height while keeping spacing constant
-				const baseSpacing = (this.width * 0.98 / this.ledDisplay.dotCols) * 1.3; // Width-limited spacing (constant)
-				const newDotRows = Math.max(1, Math.floor((this.height * 0.95) / baseSpacing));
-				
-				// Log if there's a significant change in dot rows
-				if (Math.abs(newDotRows - previousDotRows) > 10) {
-					console.log(`Significant change in LED matrix size: ${previousDotRows} -> ${newDotRows} rows`);
-				}
-				
-				// Update the dotRows property
-				this.ledDisplay.dotRows = newDotRows;
-				
-				// Update the display dimensions
-				this.ledDisplay.updateDisplaySize(this.width, this.height);
-				
-				// Ensure LED display is visible
-				if (this.ledDisplay.ledGroup) {
-					this.ledDisplay.ledGroup.visible = true;
-				}
 			} else {
-				console.log("Skipping LED display update during animation - will recreate at the end");
+				// For normal and tall modes, use the standard button positioning
+				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
+				
+				// CRITICAL FIX: In detail mode, reposition social buttons above scoreboard
+				if (this.socialButtonManager) {
+					this.socialButtonManager.positionButtonsAbove(this.width, this.height, 0);
+				}
 			}
 		}
 		
@@ -1872,58 +1733,55 @@ export class TokenScoreboard {
 	 * @param {Array} tokens - Array of token data objects
 	 */
 	updateTokenData(tokens) {
-		// Provide sample data if no tokens are provided or array is empty
-		if (!tokens || tokens.length === 0) {
-			console.log("TokenScoreboard: No token data provided, using sample data");
-			tokens = [
-				{
-					baseToken: { symbol: 'DOGE' },
-					priceUsd: '0.1234',
-					priceChange: { h24: 5.67 }
-				},
-				{
-					baseToken: { symbol: 'PEPE' },
-					priceUsd: '0.00001234',
-					priceChange: { h24: -2.34 }
-				},
-				{
-					baseToken: { symbol: 'SHIB' },
-					priceUsd: '0.00002678',
-					priceChange: { h24: 1.23 }
-				}
-			];
-		}
-		
-		// Map and clean the data to ensure we have all required properties
-		this.displayData = tokens.slice(0, this.maxTokensToShow).map(token => {
-			const symbol = token.baseToken?.symbol || 
-				(token.tokenAddress ? token.tokenAddress.substring(0, 6) : 'UNKN');
+		if (this.displayManager) {
+			// Check if we're in detail mode - if so, find and update the current token
+			if (this.detailMode && this.detailToken) {
+				// Try to find the updated version of the currently displayed token
+				const updatedDetailToken = tokens.find(t => {
+					// Match by address if available
+					if (t.tokenAddress && this.detailToken.tokenAddress) {
+						return t.tokenAddress.toLowerCase() === this.detailToken.tokenAddress.toLowerCase();
+					}
+					// Match by symbol as fallback
+					const detailSymbol = this.detailToken.baseToken?.symbol || this.detailToken.symbol || '';
+					const tokenSymbol = t.baseToken?.symbol || t.symbol || '';
+					return detailSymbol === tokenSymbol;
+				});
 				
-			// Make sure price is a string or number and not null/undefined
-			let price = token.priceUsd;
-			if (price === undefined || price === null) {
-				price = "0";
+				// If we found an updated version of the current token, update it in place
+				if (updatedDetailToken) {
+					console.log("Updating detail token with refreshed data");
+					
+					// Store previous token for comparison
+					const previousToken = this.detailToken;
+					
+					// Update token data
+					this.detailToken = {
+						...this.detailToken,
+						priceUsd: updatedDetailToken.priceUsd || this.detailToken.priceUsd,
+						priceChange: updatedDetailToken.priceChange || this.detailToken.priceChange,
+						marketCap: updatedDetailToken.marketCap || this.detailToken.marketCap,
+						fdv: updatedDetailToken.fdv || this.detailToken.fdv,
+						volume: updatedDetailToken.volume || this.detailToken.volume,
+						liquidity: updatedDetailToken.liquidity || this.detailToken.liquidity,
+						txns: updatedDetailToken.txns || this.detailToken.txns
+					};
+					
+					// If token data has changed, update social button colors
+					const hasTokenChanged = 
+						previousToken.priceUsd !== this.detailToken.priceUsd || 
+						previousToken.priceChange !== this.detailToken.priceChange;
+					
+					if (hasTokenChanged && this.socialButtonManager) {
+						this.updateSocialButtonColors(this.detailToken);
+						this.lastDetailToken = this.detailToken;
+					}
+				}
 			}
 			
-			// Make sure change is a number and not null/undefined
-			let change = token.priceChange?.h24;
-			if (change === undefined || change === null) {
-				change = 0;
-			} else if (typeof change === 'string') {
-				change = parseFloat(change) || 0;
-			}
-			
-			return {
-				symbol: symbol,
-				price: price,
-				change: change
-			};
-		});
-		
-		console.log("TokenScoreboard: Updated display data", this.displayData);
-		
-		// Reset scroll position
-		this.scrollPosition = 0;
+			// Update token data in display manager, which will preserve scroll position
+			this.displayManager.updateTokenData(tokens);
+		}
 	}
 	
 	/**
@@ -1931,472 +1789,77 @@ export class TokenScoreboard {
 	 * @param {Object} token Token data
 	 */
 	showTokenDetail(token) {
-		if (!token) return;
-		console.log("Showing token detail for:", token.baseToken?.symbol || token.symbol);
+		if (!token) {
+			console.log("Cannot show token detail: token is undefined");
+			return;
+		}
 		
-		// Ensure token has all required fields initialized
-		this.detailToken = {
-			// Default/fallback values for required fields
-			baseToken: { symbol: token.baseToken?.symbol || token.symbol || 'UNKN' },
-			symbol: token.symbol || token.baseToken?.symbol || 'UNKN',
-			tokenAddress: token.tokenAddress || null,
-			chainId: token.chainId || 1, // Default to Ethereum
-			priceUsd: token.priceUsd || 0,
-			priceNative: token.priceNative || 0,
-			marketCap: token.marketCap || 0,
-			fdv: token.fdv || 0,
-			volume: token.volume || { h24: 0 },
-			liquidity: token.liquidity || { usd: 0 },
-			priceChange: token.priceChange || { m5: 0, h1: 0, h24: 0 },
-			txns: token.txns || { h24: { buys: 0, sells: 0 } },
-			socialLinks: token.socialLinks || {},
-			links: token.links || {},
-			// Then merge with the actual token data, overriding defaults
-			...token
-		};
+		console.log("Showing detail for token:", token.name || token.symbol);
 		
 		this.detailMode = true;
-		this.lastDetailRefresh = 0; // force immediate refresh
+		this.detailToken = token;
+		this.lastDetailRefresh = Date.now(); // For _refreshDetailTokenData
 		
-		// Show the exit button
+		if (this.displayManager) {
+			this.displayManager.showTokenDetail(); // Uses this.detailToken from TokenScoreboard
+		}
+		
+		// Find and highlight the token in the tag cube if we have access to TagManager
+		const tokenAddress = token.tokenAddress || (token.baseToken && token.baseToken.address);
+		if (tokenAddress) {
+			console.log(`Highlighting token with address: ${tokenAddress} in tag cube`);
+			
+			// Try different ways to access TagManager
+			if (this.tagManager) {
+				// We already have a reference to TagManager
+				this.tagManager.highlightToken(tokenAddress);
+			} else if (this.scene && this.scene.userData && this.scene.userData.tagManager) {
+				// Use the TagManager stored in scene userData
+				this.scene.userData.tagManager.highlightToken(tokenAddress);
+			} else if (window.memeCube && window.memeCube.tagsManager && window.memeCube.tagsManager.tagManager) {
+				// Use the global TagManager
+				window.memeCube.tagsManager.tagManager.highlightToken(tokenAddress);
+			} else {
+				console.log("Could not find TagManager to highlight token in tag cube");
+			}
+		}
+		
 		if (this.buttonManager) {
 			this.buttonManager.setExitButtonVisibility(true);
-			
-			// Make social media buttons visible for detail mode
-			this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-			
-			// Set appropriate colors for social buttons based on link availability
-			this._updateSocialButtonColors();
-			
-			// CRITICAL FIX: Position social buttons above the scoreboard
-			this._positionSocialButtonsAboveScoreboard();
 		}
 		
-		// Increase target height slightly if in normal mode
-		if (this.sizeMode === 'normal') {
-			this.changeSizeMode('normal');
+		if (this.socialButtonManager && this.sizeMode !== 'hidden') {
+			// Update social buttons with the new token
+			this.socialButtonManager.updateState(this.detailToken, this.width, this.height);
+			this.updateSocialButtonColors(this.detailToken);
+			this.updateSocialButtonPositionsIfNeeded(true); // Force update positions
+			this.lastDetailToken = this.detailToken; // Store reference to detect changes
 		}
 		
-		// Force an immediate refresh to get latest data
-		setTimeout(() => {
-			if (this.detailMode) {
-				console.log("Triggering immediate token detail refresh");
-				this._refreshDetailTokenData();
-				
-				// CRITICAL FIX: Make sure social buttons are still visible after refresh
-				if (this.buttonManager) {
-					this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-					this._updateSocialButtonColors();
-					this._positionSocialButtonsAboveScoreboard();
-				}
-			}
-		}, 100);
-	}
-	
-	/**
-	 * Update social button colors based on link availability
-	 * @private
-	 */
-	_updateSocialButtonColors() {
-		if (!this.buttonManager || !this.buttonManager.socialButtons) return;
-		
-		console.log("Updating social button colors based on link availability");
-		
-		const socialButtons = this.buttonManager.socialButtons;
-		
-		// Check if we have the buttons we expect
-		if (!this.detailToken) return;
-		
-		// Twitter button (index 0)
-		if (socialButtons[0]) {
-			const hasTwitter = !!this.detailToken.socialLinks?.twitter || 
-							  !!this.detailToken.socialLinks?.x || 
-							  !!this.detailToken.links?.twitter || 
-							  !!this.detailToken.links?.x ||
-							  !!this.detailToken.baseToken?.symbol; // Always allow Twitter search by symbol
-			
-			this._setSocialButtonColor(socialButtons[0], 
-				hasTwitter ? 0x1DA1F2 : 0x888888, // Blue if link exists, grey if not
-				hasTwitter ? 1.0 : 0.6); // Full opacity if link exists, dimmed if not
-			
-			console.log(`Twitter button color set to ${hasTwitter ? 'active (blue)' : 'inactive (grey)'}`);
-		}
-		
-		// Discord button (index 1)
-		if (socialButtons[1]) {
-			const hasDiscord = !!this.detailToken.socialLinks?.discord || 
-							 !!this.detailToken.links?.discord;
-			
-			this._setSocialButtonColor(socialButtons[1], 
-				hasDiscord ? 0x5865F2 : 0x888888, // Purple if link exists, grey if not
-				hasDiscord ? 1.0 : 0.6); // Full opacity if link exists, dimmed if not
-			
-			console.log(`Discord button color set to ${hasDiscord ? 'active (purple)' : 'inactive (grey)'}`);
-		}
-		
-		// URL button (index 2)
-		if (socialButtons[2]) {
-			const hasUrl = !!this.detailToken.website || 
-						 !!this.detailToken.socialLinks?.website || 
-						 !!this.detailToken.links?.website ||
-						 !!this.detailToken.explorer ||
-						 !!this.detailToken.tokenAddress; // Token address means we can create explorer link
-			
-			this._setSocialButtonColor(socialButtons[2], 
-				hasUrl ? 0x00C853 : 0x888888, // Green if link exists, grey if not
-				hasUrl ? 1.0 : 0.6); // Full opacity if link exists, dimmed if not
-			
-			console.log(`URL button color set to ${hasUrl ? 'active (green)' : 'inactive (grey)'}`);
-		}
-	}
-	
-	/**
-	 * Helper to set a social button color and opacity
-	 * @private
-	 */
-	_setSocialButtonColor(button, color, opacity) {
-		if (!button) return;
-		
-		button.traverse(obj => {
-			// Find the main planet material (should be first child with material)
-			if (obj.material && obj.geometry && obj.geometry.type.includes('Sphere')) {
-				obj.material.color.setHex(color);
-				if (obj.material.transparent) {
-					obj.material.opacity = opacity;
-				}
-			}
-			
-			// Also adjust any ring material opacity
-			if (obj.material && obj.geometry && obj.geometry.type.includes('Ring')) {
-				if (obj.material.transparent) {
-					obj.material.opacity = opacity * 0.5; // Rings are half as opaque
-				}
-			}
-		});
-	}
-	
-	/**
-	 * Position social buttons above the scoreboard for better visibility
-	 * @private
-	 */
-	_positionSocialButtonsAboveScoreboard() {
-		if (!this.buttonManager) {
-			console.log("Cannot position social buttons: button manager not found");
-			return;
-		}
-		
-		if (!this.buttonManager.socialButtons || !Array.isArray(this.buttonManager.socialButtons) || this.buttonManager.socialButtons.length === 0) {
-			console.log("Cannot position social buttons: no social buttons found", 
-				this.buttonManager.socialButtons ? `(array length: ${this.buttonManager.socialButtons.length})` : "(buttons undefined)");
-			return;
-		}
-		
-		console.log("Positioning social buttons above scoreboard for detail mode");
-		
-		const topOffset = 2.0; // Space above scoreboard
-		const halfWidth = this.width / 2;
-		const topY = this.height/2 + topOffset; // Above the scoreboard
-		const buttonZ = -1.2; // Keep in front
-		const socialButtonSpacing = 2.0; // Wider spacing for better visibility
-		
-		// Position each social button along the top
-		const socialButtons = this.buttonManager.socialButtons;
-		const totalWidth = (socialButtons.length - 1) * socialButtonSpacing;
-		const startX = -totalWidth / 2;
-		
-		let visibleButtonCount = 0;
-		
-		socialButtons.forEach((button, index) => {
-			// Skip if button doesn't exist
-			if (!button) {
-				console.log(`Social button at index ${index} is undefined`);
-				return;
-			}
-			
-			// Position buttons along the top, spread out evenly
-			button.position.set(
-				startX + index * socialButtonSpacing,
-				topY, // Above scoreboard
-				buttonZ // In front
-			);
-			
-			// Force visibility and proper rendering
-			button.visible = true;
-			button.traverse(obj => {
-				if (obj.material) {
-					obj.material.depthTest = false;
-					obj.renderOrder = 100; // High render order for visibility
-					if (obj.material.transparent) {
-						obj.material.opacity = 1.0; // Full opacity
-					}
-				}
-			});
-			
-			visibleButtonCount++;
-			console.log(`Social button ${index} positioned at x=${button.position.x.toFixed(2)}, y=${button.position.y.toFixed(2)}, visible=${button.visible}`);
-		});
-		
-		console.log(`Finished positioning ${visibleButtonCount} social buttons above scoreboard`);
+		console.log(`Token detail mode activated for ${token.symbol || token.name || 'unknown'}`);
 	}
 	
 	/**
 	 * Exit detail mode back to scrolling list
 	 */
 	exitTokenDetail() {
+		console.log("Exiting token detail mode");
 		this.detailMode = false;
 		this.detailToken = null;
+		this.lastDetailToken = null; // Clear the reference
 		
-		// Hide the exit button
+		if (this.displayManager) {
+			this.displayManager.exitTokenDetail();
+		}
+		
 		if (this.buttonManager) {
 			this.buttonManager.setExitButtonVisibility(false);
-			
-			// Reset social button colors to their defaults before hiding
-			this.buttonManager.socialButtons.forEach((button, index) => {
-				// Reset to original button colors
-				const defaultColors = [0x1DA1F2, 0x5865F2, 0x00C853]; // Twitter blue, Discord purple, URL green
-				if (button && index < defaultColors.length) {
-					this._setSocialButtonColor(button, defaultColors[index], 0.9);
-				}
-			});
-			
-			// Hide social media buttons when exiting detail mode
-			// Keep them visible in hidden mode though
-			this.buttonManager.setSocialButtonsVisibility(false, this.sizeMode);
 		}
-	}
-	
-	/**
-	 * Internal: refresh detail token data from provider
-	 */
-	async _refreshDetailTokenData() {
-		if (!this.dataProvider || !this.detailToken) return;
 		
-		const now = Date.now();
-		if (now - this.lastDetailRefresh < this.detailRefreshInterval || this.isRefreshingDetail) return;
-		
-		this.isRefreshingDetail = true;
-		try {
-			console.log("Refreshing detail token data");
-			// Debug info about the token we're trying to update
-			console.log("Current detail token:", {
-				symbol: this.detailToken.baseToken?.symbol,
-				chainId: this.detailToken.chainId,
-				address: this.detailToken.tokenAddress,
-				dataProvider: !!this.dataProvider
-			});
-			
-			// Attempt cache first (dataProvider may implement getCachedTokenPair)
-			// For now just call refreshData to update
-			await this.dataProvider.refreshData();
-			
-			// Get updated version from provider
-			const tokens = await this.dataProvider.getCurrentPageTokens();
-			if (!tokens || tokens.length === 0) {
-				console.log("No tokens returned from provider");
-				return;
-			}
-			
-			console.log(`Got ${tokens.length} tokens from provider, looking for match`);
-			
-			// Try to find an exact match first (address + chain)
-			let updated = tokens.find(t => {
-				return (t.tokenAddress && this.detailToken.tokenAddress && t.tokenAddress.toLowerCase() === this.detailToken.tokenAddress.toLowerCase()) &&
-					   (t.chainId == this.detailToken.chainId);
-			});
-			
-			// If no exact match by address+chain, try address only
-			if (!updated) {
-				updated = tokens.find(t => {
-					return this.detailToken.tokenAddress && t.tokenAddress && t.tokenAddress.toLowerCase() === this.detailToken.tokenAddress.toLowerCase();
-				});
-			}
-			
-			// If still not found, try matching by symbol ignoring chain
-			if (!updated) {
-				updated = tokens.find(t => {
-					const targetSym = (this.detailToken.baseToken?.symbol || this.detailToken.symbol || '').toUpperCase();
-					const sym = (t.baseToken?.symbol || t.symbol || '').toUpperCase();
-					return sym === targetSym;
-				});
-			}
-			
-			if (updated) {
-				console.log("Found updated token data:", updated.baseToken?.symbol);
-				// Create a new object merging the original with the updates
-				// Original data takes precedence for null properties in the update
-				this.detailToken = { 
-					...updated, 
-					...this.detailToken,
-					// Force these specific properties to update from new data
-					priceUsd: updated.priceUsd || this.detailToken.priceUsd,
-					priceChange: updated.priceChange || this.detailToken.priceChange,
-					marketCap: updated.marketCap || this.detailToken.marketCap,
-					fdv: updated.fdv || this.detailToken.fdv,
-					volume: updated.volume || this.detailToken.volume,
-					liquidity: updated.liquidity || this.detailToken.liquidity,
-					txns: updated.txns || this.detailToken.txns
-				};
-			} else {
-				console.log("Could not find matching token for update, trying alternative methods");
-				
-				// Try directly querying by address if available
-				if (this.detailToken.tokenAddress && this.dataProvider.getTokenDetails) {
-					try {
-						const tokenDetails = await this.dataProvider.getTokenDetails(
-							this.detailToken.tokenAddress, 
-							this.detailToken.chainId
-						);
-						
-						if (tokenDetails) {
-							console.log("Retrieved token details directly:", tokenDetails.baseToken?.symbol);
-							this.detailToken = { ...this.detailToken, ...tokenDetails };
-						}
-					} catch (err) {
-						console.warn("Failed to get token details directly:", err);
-					}
-				}
-			}
-			
-			// Update social button colors with fresh data
-			this._updateSocialButtonColors();
-			
-			this.lastDetailRefresh = Date.now();
-		} catch (err) {
-			console.error('Scoreboard detail refresh error', err);
-		} finally {
-			this.isRefreshingDetail = false;
-		}
-	}
-	
-	/**
-	 * Internal: draw detail token information on LED display
-	 */
-	_drawDetailToken() {
-		if (!this.ledDisplay || !this.detailToken) return;
-
-		const { ledDisplay: d } = this;
-
-		// Show properly formatted symbol with fallbacks
-		const symbol = (this.detailToken.baseToken?.symbol || this.detailToken.symbol || this.detailToken.name || 'UNKN');
-		let row = 2;
-		// Draw symbol centred horizontally if space allows, else left aligned
-		let colStart = 2;
-		if (d.dotCols > symbol.length * 4 + 4) {
-			colStart = Math.floor((d.dotCols - symbol.length * 4) / 2);
-		}
-		d.drawText(symbol, row, colStart, 'cyan');
-
-		row += 6;
-		const priceTxt = formatPrice(this.detailToken.priceUsd || this.detailToken.priceNative || 0);
-		d.drawText('P:$' + priceTxt, row, 2, 'yellow');
-
-		row += 6;
-		const mcText = this.detailToken.marketCap ? formatCompactNumber(this.detailToken.marketCap) : 'N/A';
-		const fdvText = this.detailToken.fdv ? formatCompactNumber(this.detailToken.fdv) : 'N/A';
-		d.drawText('MC:' + mcText + ' FDV:' + fdvText, row, 2, 'white');
-
-		row += 6;
-		// Price changes - split into two rows
-		const pc = this.detailToken.priceChange || {};
-		const change5m = pc.m5 !== undefined ? pc.m5 : null;
-		const change1h = pc.h1 !== undefined ? pc.h1 : null;
-		const change24h = pc.h24 !== undefined ? pc.h24 : null;
-
-		// First row: headers
-		d.drawText('5m', row, 0, 'white');
-		//draw a yellow centre dot
-		d.drawText(':', row, 25, 'yellow');
-		d.drawText('1h', row, 30, 'white');
-		//draw a yellow centre dot
-		d.drawText(':', row, 55, 'yellow');
-		d.drawText('24h', row, 60, 'white');
-		
-		// Second row: percentages with N/A fallback
-		row += 6;
-		d.drawText(change5m !== null ? formatChange(change5m, true) : 'N/A', row, 0, 
-			change5m !== null ? getChangeColor(change5m) : 'white');
-		//draw a yellow centre dot
-		d.drawText(':', row, 25, 'yellow');
-		d.drawText(change1h !== null ? formatChange(change1h, true) : 'N/A', row, 30, 
-			change1h !== null ? getChangeColor(change1h) : 'white');
-		//draw a yellow centre dot
-		d.drawText(':', row, 55, 'yellow');
-		d.drawText(change24h !== null ? formatChange(change24h, true) : 'N/A', row, 60, 
-			change24h !== null ? getChangeColor(change24h) : 'white');
-
-		// Adjust row spacing
-		row += 7;
-
-		// If we have transaction data and there's room (tall mode or enough rows)
-		if (this.sizeMode === 'tall' || d.dotRows >= 36) {
-			// Draw transaction data if available
-			if (this.detailToken.txns?.h24) {
-				const txns = this.detailToken.txns.h24;
-				const buyTxns = formatCompactNumber(txns.buys ?? 0);
-				const sellTxns = formatCompactNumber(txns.sells ?? 0);
-				
-				// Draw buys in green, sells in red
-				d.drawText('B:', row, 0, 'green');
-				d.drawText(buyTxns.toString(), row, 12, 'white');
-				
-				d.drawText('S:', row, 40, 'red');
-				d.drawText(sellTxns.toString(), row, 52, 'white');
-				
-				// Buy/sell ratio
-				const ratio = sellTxns > 0 ? (buyTxns / sellTxns).toFixed(2) : '';
-				d.drawText(ratio, row, 80, (ratio > 1 && ratio !== '') ? 'green' : 'red');
-				if(ratio !== '') {
-					d.drawText('%', row, 92, 'white');
-				}
-			} else {
-				// No transaction data
-				d.drawText('TXS: NO DATA', row, 2, 'white');
-				row += 6;
-			}
-			row += 6;
-			
-			// Show liquidity if available
-			if (this.detailToken.liquidity?.usd) {
-				const liq = formatCompactNumber(this.detailToken.liquidity.usd);
-				d.drawText('LIQ: $' + liq, row, 5, 'cyan');
-			} else {
-				d.drawText('LIQ: N/A', row, 5, 'white');
-			}
-			row += 6;
-			
-			// Show volume if available
-			if (this.detailToken.volume?.h24) {
-				const vol = formatCompactNumber(this.detailToken.volume.h24);
-				d.drawText('VOL: $' + vol, row, 5, 'yellow');
-			} else {
-				d.drawText('VOL: N/A', row, 5, 'white');
-			}
-			
-			// Show chain ID and age information if available
-			row += 6;
-			const chainMap = {
-				1: 'ETH',
-				56: 'BSC',
-				137: 'POLY',
-				42161: 'ARB',
-				10: 'OP',
-				8453: 'BASE',
-			};
-
-			row += 6;
-
-			
-			const chainName = chainMap[this.detailToken.chainId] || `CH:${this.detailToken.chainId || 'N/A'}`;
-			d.drawText(chainName, row, 2, 'green');
-			
-			// Show address or link info
-			if (this.detailToken.tokenAddress) {
-				//split the address into 3 lines of 10 characters each
-				const addrLines = this.detailToken.tokenAddress.match(/.{1,15}/g);
-				for (let i = 0; i < addrLines.length; i++) {
-					d.drawText(addrLines[i], row + (i * 5), i, 'yellow');
-				}
-			}
+		if (this.socialButtonManager && this.sizeMode !== 'hidden') {
+			this.socialButtonManager.updateState(null, this.width, this.height);
+			this.updateSocialButtonColors(null); // Reset colors when exiting detail mode
+			this.updateSocialButtonPositionsIfNeeded(true); // Force update positions
 		}
 	}
 	
@@ -2406,6 +1869,11 @@ export class TokenScoreboard {
 	toggleVisibility() {
 		this.isVisible = !this.isVisible;
 		this.scoreboardGroup.visible = this.isVisible;
+		
+		// Also toggle visibility of the expand planet when toggling scoreboard visibility
+		if (this.expandPlanet) {
+			this.expandPlanet.visible = this.isVisible && this.sizeMode === 'hidden';
+		}
 		
 		// Trigger a jet effect when becoming visible again
 		if (this.isVisible && this.jetsManager) {
@@ -2456,10 +1924,13 @@ export class TokenScoreboard {
 			}
 		}
 		
-		// Update the coordinate axes helper position
-		this.updateCoordinateAxesHelper();
 		
-		// Handle display modes - HANDLE PLANET ONLY HERE, NOT IN _updateScreenPosition
+		// Delegate display updates to the display manager
+		if (this.displayManager) {
+			this.displayManager.update(deltaTime); // This will handle its own refresh logic now
+		}
+
+		// Handle display modes - PLANET ONLY HERE (mostly managed by modeManager now)
 		if (this.sizeMode === 'hidden') {
 			// For hidden mode, make sure only the expand button is visible
 			
@@ -2482,21 +1953,39 @@ export class TokenScoreboard {
 				});
 			}
 			
-			// Make sure the button manager's buttons are also visible
+			// Handle button states if detailMode changes while hidden
 			if (this.buttonManager) {
-				this.buttonManager.updateButtonPositions(this.width, this.height, this.sizeMode, this.detailMode);
-				this.buttonManager.updateButtonColors(this.sizeMode);
-				
-				// Ensure expand button is visible
-				if (this.buttonManager.expandButton) {
-					this.buttonManager.expandButton.visible = true;
+				if (this.detailMode !== this.previousDetailModeForHidden) {
+					console.log("TokenScoreboard: DetailMode changed in Hidden. Updating button states.");
+					// Visibility for expand button (always on in hidden mode)
+					if (this.buttonManager.expandButton) {
+						this.buttonManager.expandButton.visible = true;
+						// Positioning of expandButton (e.g., centered) is handled by finalizeSizeModeChange
+					}
+					// Collapse button should be hidden in 'hidden' mode
+					if (this.buttonManager.collapseButton) {
+						this.buttonManager.collapseButton.visible = false;
+					}
+					// Exit button visibility depends on detailMode
+					if (this.buttonManager.exitButton) {
+						this.buttonManager.exitButton.visible = this.detailMode;
+					}
+					// Update social button states based on detailMode
+					if (this.socialButtonManager) {
+						this.socialButtonManager.updateState(this.detailMode ? this.detailToken : null, this.width, this.height);
+						
+						// Ensure social buttons are visible if in detail mode, otherwise hidden
+						this.socialButtonManager.buttonList.forEach(button => {
+							if (button) {
+								button.visible = this.detailMode;
+							}
+						});
+					}
+					this.previousDetailModeForHidden = this.detailMode;
 				}
-				if (this.buttonManager.collapseButton) {
-					this.buttonManager.collapseButton.visible = true;
-				}
-				
-				// Force social buttons to be visible in hidden mode
-				this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
+				// The explicit calls to updateButtonPositions and updateButtonColors per frame are removed.
+				// Their one-time setup for 'hidden' mode is handled in finalizeSizeModeChange.
+				// Visibility for expandButton and collapseButton is now more targeted above.
 			}
 			
 			return; // Skip the rest of the update in hidden mode
@@ -2504,6 +1993,12 @@ export class TokenScoreboard {
 			// Hide the expand planet in non-hidden modes
 			if (this.expandPlanet) {
 				this.expandPlanet.visible = false;
+			}
+
+			// Reset previousDetailModeForHidden when not in hidden mode,
+			// so the check triggers correctly on next entry to hidden mode.
+			if (this.previousDetailModeForHidden !== null) {
+				this.previousDetailModeForHidden = null;
 			}
 			
 			// No more per-frame bolt position fixing - it fights with animations
@@ -2522,107 +2017,31 @@ export class TokenScoreboard {
 			return; // Don't update LED display during resize animations
 		}
 		
-		// Clear display first
-		if (this.ledDisplay) {
-			this.ledDisplay.clear();
-
-			// Detail mode
-			if (this.detailMode && this.detailToken) {
-				// Calculate elapsed time since last refresh
-				const now = Date.now();
-				const elapsedSinceRefresh = now - this.lastDetailRefresh;
-				
-				// Add a small refresh indicator if we're due for refresh or refreshing
-				const isRefreshDue = elapsedSinceRefresh >= this.detailRefreshInterval;
-				
-				// Attempt to refresh data when interval has passed
-				if (isRefreshDue && !this.isRefreshingDetail) {
-					console.log(`Time since last refresh: ${elapsedSinceRefresh}ms, refreshing now`);
-					this._refreshDetailTokenData();
-				}
-				
-				// Force redraw with latest data
-				this._drawDetailToken();
-				
-				// Show a small refresh indicator when actively refreshing
-				if (this.isRefreshingDetail || isRefreshDue) {
-					// Draw a small spinning indicator in the top right corner
-					const time = Date.now();
-					const animationFrame = Math.floor((time % 1000) / 250); // 0-3 animation frames
-					const refreshChar = ['⟳', '⟲', '⟳', '⟲'][animationFrame]; 
-					this.ledDisplay.drawText(refreshChar, 2, this.ledDisplay.dotCols - 6, 'cyan');
-				}
-				
-				return; // skip list rendering
-			}
-			
-			// If no data yet, show loading message
-			if (!this.displayData || this.displayData.length === 0) {
-				// Show "LOADING" text in bright white in the center
-				this.ledDisplay.drawText("LOADING DATA", Math.floor(this.ledDisplay.dotRows/2) - 2, Math.floor(this.ledDisplay.dotCols/2) - 20, 'white');
-				
-				// Add a line of dots below that cycles for animation
-				const time = Date.now();
-				const dotCount = Math.floor((time % 1500) / 300) + 1; // 1-5 dots cycling
-				let dots = "";
-				for (let i = 0; i < dotCount; i++) {
-					dots += ".";
-				}
-				this.ledDisplay.drawText(dots, Math.floor(this.ledDisplay.dotRows/2) * 1.2 + 3, Math.floor(this.ledDisplay.dotCols/2) * 1.2 - 3, 'cyan');
-				
-				// Try to use the sample data if we've been loading too long (over 3 seconds)
-				if (!this._loadAttempted && time - this.lastUpdateTime > 3000) {
-					this.updateTokenData([]);  // This will use the sample data
-					this._loadAttempted = true;
-				}
-				return;
-			}
-			
-			// Calculate total content height (in rows)
-			const totalContentHeight = this.displayData.length * 12; // Each token takes 12 rows
-			const scrollGap = 10; // Gap in rows before content loops again
-			const totalScrollHeight = totalContentHeight + scrollGap;
-			
-			// Check if content exceeds display height
-			if (totalContentHeight > this.ledDisplay.dotRows) {
-				// Update scroll position for vertical scrolling
-				this.scrollPosition += this.scrollSpeed * deltaTime * 60; // Adjust speed based on deltaTime
-				
-				// Reset scroll position to loop content after gap
-				if (this.scrollPosition >= totalScrollHeight) {
-					this.scrollPosition = 0;
-				}
-				
-				// Draw tokens with vertical offset based on scroll position
-				for (let i = 0; i < this.displayData.length; i++) {
-					let rowOffset = i * 12 - Math.floor(this.scrollPosition);
-					if (rowOffset < -12) {
-						// If the token is above the visible area, try to wrap it to the bottom after the gap
-						rowOffset += totalScrollHeight;
-					}
-					if (rowOffset >= -12 && rowOffset < this.ledDisplay.dotRows) {
-						this.ledDisplay.drawTokenInfo(this.displayData[i], rowOffset);
-					}
-				}
-			} else {
-				// Draw all tokens dynamically based on available space
-				const tokenSpacing = Math.floor(this.ledDisplay.dotRows / this.displayData.length);
-				for (let i = 0; i < this.displayData.length; i++) {
-					if (i * tokenSpacing < this.ledDisplay.dotRows) {
-						this.ledDisplay.drawTokenInfo(this.displayData[i], i * tokenSpacing);
-					}
-				}
-			}
-		}
 		
-		// CRITICAL FIX: Always ensure social buttons visibility in detail mode
-		if (this.detailMode && this.buttonManager && !this.isAnimatingMode) {
-			const buttonsNeedFixing = this.buttonManager.socialButtons.some(btn => !btn.visible);
-			if (buttonsNeedFixing) {
-				console.log("Re-enabling social buttons visibility in detail mode");
-				this.buttonManager.setSocialButtonsVisibility(true, this.sizeMode);
-				this._positionSocialButtonsAboveScoreboard();
+		// Update social button manager state if it exists and not animating mode
+		if (this.socialButtonManager && !this.isAnimatingMode) {
+			// Only update positions periodically rather than every frame
+			this.updateSocialButtonPositionsIfNeeded();
+			
+			// Only update colors if the detail token has changed
+			if (this.detailToken !== this.lastDetailToken) {
+				this.updateSocialButtonColors(this.detailToken);
+				this.lastDetailToken = this.detailToken;
 			}
+			
+			// Show social buttons only in detail mode, since they're now part of scoreboard group
+			this.socialButtonManager.buttonList.forEach(button => {
+				if (button) {
+					button.visible = this.detailMode;
+					button.traverse(obj => {
+						if (obj.material) {
+							obj.material.depthTest = false;
+							obj.material.depthWrite = false;
+							obj.renderOrder = 3000; // Very high render order
+						}
+					});
+				}
+			});
 		}
 	}
 	
@@ -2637,6 +2056,7 @@ export class TokenScoreboard {
 		if (this.ledDisplay) this.ledDisplay.dispose();
 		if (this.jetsManager) this.jetsManager.dispose();
 		if (this.buttonManager) this.buttonManager.dispose();
+		if (this.socialButtonManager) this.socialButtonManager.dispose(); // Clean up social button manager
 		
 		// Remove the dedicated expand planet
 		if (this.expandPlanet) {
@@ -2691,122 +2111,20 @@ export class TokenScoreboard {
 		this.axesHelper = null;
 	}
 	
+
 	/**
-	 * Create a coordinate axes helper to show X, Y, Z directions
+	 * Position the expandPlanet consistently in the bottom left corner
+	 * Called every frame in hidden mode to ensure consistent positioning
+	 * @private
 	 */
-	createCoordinateAxesHelper() {
-		// Create a small axes helper to visualize coordinate system
-		const axesHelper = new THREE.Group();
+	_positionExpandPlanetBottomRight() {
+		if (!this.expandPlanet || !this.camera) return;
 		
-		// Size of the axes
-		const axisLength = 2.0;
-		const axisWidth = 0.1;
-		
-		// Create X axis (RED)
-		const xAxisGeometry = new THREE.BoxGeometry(axisLength, axisWidth, axisWidth);
-		const xAxisMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red
-		const xAxis = new THREE.Mesh(xAxisGeometry, xAxisMaterial);
-		xAxis.position.x = axisLength / 2;
-		
-		// Create Y axis (GREEN)
-		const yAxisGeometry = new THREE.BoxGeometry(axisWidth, axisLength, axisWidth);
-		const yAxisMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); // Green
-		const yAxis = new THREE.Mesh(yAxisGeometry, yAxisMaterial);
-		yAxis.position.y = axisLength / 2;
-		
-		// Create Z axis (BLUE)
-		const zAxisGeometry = new THREE.BoxGeometry(axisWidth, axisWidth, axisLength);
-		const zAxisMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff }); // Blue
-		const zAxis = new THREE.Mesh(zAxisGeometry, zAxisMaterial);
-		zAxis.position.z = axisLength / 2;
-		
-		// Add text labels for axes
-		this._createAxisLabel(axesHelper, 'X', axisLength + 0.2, 0, 0, 0xff0000);
-		this._createAxisLabel(axesHelper, 'Y', 0, axisLength + 0.2, 0, 0x00ff00);
-		this._createAxisLabel(axesHelper, 'Z', 0, 0, axisLength + 0.2, 0x0000ff);
-		
-		// Add positive and negative indicators
-		this._createAxisLabel(axesHelper, '+', axisLength, 0, 0, 0xff0000);
-		this._createAxisLabel(axesHelper, '+', 0, axisLength, 0, 0x00ff00);
-		this._createAxisLabel(axesHelper, '+', 0, 0, axisLength, 0x0000ff);
-		this._createAxisLabel(axesHelper, '-', -axisLength / 2, 0, 0, 0xff0000);
-		this._createAxisLabel(axesHelper, '-', 0, -axisLength / 2, 0, 0x00ff00);
-		this._createAxisLabel(axesHelper, '-', 0, 0, -axisLength / 2, 0x0000ff);
-		
-		// Add axes to the helper group
-		axesHelper.add(xAxis);
-		axesHelper.add(yAxis);
-		axesHelper.add(zAxis);
-		
-		// Position at the top left corner of screen, negative z brings forward
-		axesHelper.position.set(-10, 5, -5);
-		axesHelper.scale.set(0.8, 0.8, 0.8);
-		
-		// Always keep visible
-		axesHelper.renderOrder = 100;
-		axesHelper.traverse(obj => {
-			if (obj.material) {
-				obj.material.depthTest = false;
-			}
-		});
-		
-		// Add to the scene directly (not to scoreboard group)
-		this.scene.add(axesHelper);
-		
-		// Store a reference to the helper
-		this.axesHelper = axesHelper;
-		
-		console.log("Created coordinate axes helper");
-	}
-	
-	/**
-	 * Helper method to create axis labels
-	 */
-	_createAxisLabel(parent, text, x, y, z, color) {
-		// Create a Canvas for the text
-		const canvas = document.createElement('canvas');
-		canvas.width = 64;
-		canvas.height = 64;
-		const ctx = canvas.getContext('2d');
-		
-		// Draw text
-		ctx.fillStyle = `#${color.toString(16).padStart(6, '0')}`;
-		ctx.font = 'bold 48px Arial';
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		ctx.fillText(text, canvas.width / 2, canvas.height / 2);
-		
-		// Create texture and material
-		const texture = new THREE.CanvasTexture(canvas);
-		const material = new THREE.SpriteMaterial({ 
-			map: texture,
-			transparent: true,
-			depthTest: false
-		});
-		
-		// Create sprite
-		const sprite = new THREE.Sprite(material);
-		sprite.position.set(x, y, z);
-		sprite.scale.set(0.5, 0.5, 0.5);
-		
-		parent.add(sprite);
-	}
-	
-	/**
-	 * Update the coordinate axes to follow the camera
-	 */
-	updateCoordinateAxesHelper() {
-		if (!this.axesHelper || !this.camera) return;
-		
-		// Calculate position directly based on field of view
+		// Get camera orientation vectors to compute bottom left position
 		const fov = this.camera.fov * Math.PI / 180;
 		const distance = 10; // Fixed distance from camera
-		const height = 2 * Math.tan(fov / 2) * distance;
-		const width = height * this.camera.aspect;
-		
-		// Position in top left corner
-		const x = -width * 0.35;
-		const y = height * 0.35;
+		const viewHeight = 2 * Math.tan(fov / 2) * distance;
+		const viewWidth = viewHeight * this.camera.aspect;
 		
 		// Get camera quaternion for orientation
 		const quaternion = this.camera.quaternion.clone();
@@ -2816,17 +2134,40 @@ export class TokenScoreboard {
 		const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
 		const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
 		
-		// Calculate position in 3D space
-		const pos = this.camera.position.clone()
+		// Position the expand planet at the bottom LEFT of the screen (not right)
+		// Use fixed offsets that won't change with viewWidth/Height to avoid jitter
+		const bottomY = -viewHeight * 0.4; // Lower position - never changes
+		const leftX = -viewWidth * 0.4;    // Left side instead of right
+		
+		// Calculate position in 3D space for bottom left
+		const planetPos = this.camera.position.clone()
 			.add(forward.clone().multiplyScalar(distance))
-			.add(right.clone().multiplyScalar(x))
-			.add(up.clone().multiplyScalar(y));
+			.add(right.clone().multiplyScalar(leftX))
+			.add(up.clone().multiplyScalar(bottomY));
 		
-		// Set position
-		this.axesHelper.position.copy(pos);
+		// Set position for expand planet
+		this.expandPlanet.position.copy(planetPos);
 		
-		// Set rotation to match camera orientation
-		this.axesHelper.quaternion.copy(quaternion);
+		// Look directly at the camera position
+		this.expandPlanet.lookAt(this.camera.position);
+		
+		// Add rotations to make the plus sign face forward
+		this.expandPlanet.rotateOnAxis(new THREE.Vector3(0, 1, 0), Math.PI);
+		
+		// Make sure scale is consistent - never changes during animation
+		const scale = 0.4; // Fixed scale - never changes with window size
+		this.expandPlanet.scale.set(scale, scale, scale);
+		
+		// Ensure planet is always visible with high render order and no depth test
+		this.expandPlanet.traverse(obj => {
+			if (obj.material) {
+				obj.material.depthTest = false;
+				obj.renderOrder = 2000;
+				if (obj.material.transparent) {
+					obj.material.opacity = 1.0;
+				}
+			}
+		});
 	}
 
 	/**
@@ -2870,12 +2211,12 @@ export class TokenScoreboard {
 			const material = new THREE.MeshBasicMaterial({
 				color: 0xffffff, // White
 				depthTest: false,
-				transparent: true,
+				transparent: false, // FIXED: Make opaque for visibility
 				opacity: 1.0
 			});
 			const segment = new THREE.Mesh(geometry, material);
-			segment.position.z = 0.6; // Position more in front of sphere
-			segment.renderOrder = 3001; // Extremely high render order
+			segment.position.z = 0.9; // FIXED: Position more in front of sphere for better visibility
+			segment.renderOrder = 3500; // FIXED: Even higher render order to ensure visibility
 			return segment;
 		};
 		
@@ -2886,16 +2227,32 @@ export class TokenScoreboard {
 		sphere.add(horizontalSegment);
 		sphere.add(verticalSegment);
 		
+		// Add a glowing ring around the planet
+		const ringGeometry = new THREE.RingGeometry(0.9, 1.1, 32);
+		const ringMaterial = new THREE.MeshBasicMaterial({
+			color: 0xaaffaa, // Light green for glow
+			transparent: true,
+			opacity: 0.7,
+			side: THREE.DoubleSide,
+			depthTest: false
+		});
+		
+		const expandRing = new THREE.Mesh(ringGeometry, ringMaterial);
+		expandRing.rotation.x = Math.PI / 2; // Rotate to be perpendicular to camera
+		expandRing.position.z = 0; // Same plane as sphere
+		expandRing.renderOrder = 2999; // Just below sphere render order
+		sphere.add(expandRing); // Add to sphere so they move together
+		
 		// Add sphere to expand planet group
 		this.expandPlanet.add(sphere);
 		
 		// Set the initial position - will be updated consistently in _positionExpandPlanetBottomLeft
-		// Position immediately in bottom right (not left!) using helper method if camera is available
+		// Position immediately in bottom left using helper method if camera is available
 		if (this.camera) {
 			this._positionExpandPlanetBottomRight();
 		} else {
-			// Default fallback position (bottom right)
-			this.expandPlanet.position.set(5, -7, -10);
+			// Default fallback position (bottom left)
+			this.expandPlanet.position.set(-5, -7, -10);
 			this.expandPlanet.scale.set(0.4, 0.4, 0.4); // Fixed scale
 		}
 		
@@ -2919,62 +2276,7 @@ export class TokenScoreboard {
 		// Store a reference to the sphere for hit detection
 		this.expandPlanet.userData.expandSphere = sphere;
 		
-		console.log("Created dedicated expand planet for hidden mode, positioned at bottom right");
-	}
-
-	/**
-	 * Position the expandPlanet consistently in the bottom right corner
-	 * Called every frame in hidden mode to ensure consistent positioning
-	 * @private
-	 */
-	_positionExpandPlanetBottomRight() {
-		if (!this.expandPlanet || !this.camera) return;
-		
-		// Get camera orientation vectors to compute bottom right position
-		const fov = this.camera.fov * Math.PI / 180;
-		const distance = 10; // Fixed distance from camera
-		const viewHeight = 2 * Math.tan(fov / 2) * distance;
-		const viewWidth = viewHeight * this.camera.aspect;
-		
-		// Get camera quaternion for orientation
-		const quaternion = this.camera.quaternion.clone();
-		
-		// Create camera-oriented coordinate system
-		const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
-		const right = new THREE.Vector3(1, 0, 0).applyQuaternion(quaternion);
-		const up = new THREE.Vector3(0, 1, 0).applyQuaternion(quaternion);
-		
-		// Position the expand planet at the bottom RIGHT of the screen (not left)
-		// Use fixed offsets that won't change with viewWidth/Height to avoid jitter
-		const bottomY = -viewHeight * 0.4; // Lower position - never changes
-		const rightX = viewWidth * 0.4;    // Right side - never changes
-		
-		// Calculate position in 3D space for bottom right
-		const planetPos = this.camera.position.clone()
-			.add(forward.clone().multiplyScalar(distance))
-			.add(right.clone().multiplyScalar(rightX))
-			.add(up.clone().multiplyScalar(bottomY));
-		
-		// Set position for expand planet - with a small fixed offset to ensure stability
-		this.expandPlanet.position.copy(planetPos);
-		
-		// Set rotation to match camera
-		this.expandPlanet.quaternion.copy(quaternion);
-		
-		// Make sure scale is consistent - never changes during animation
-		const scale = 0.4; // Fixed scale - never changes with window size
-		this.expandPlanet.scale.set(scale, scale, scale);
-		
-		// Ensure planet is always visible with high render order and no depth test
-		this.expandPlanet.traverse(obj => {
-			if (obj.material) {
-				obj.material.depthTest = false;
-				obj.renderOrder = 2000;
-				if (obj.material.transparent) {
-					obj.material.opacity = 1.0;
-				}
-			}
-		});
+		console.log("Created dedicated expand planet for hidden mode, positioned at bottom left");
 	}
 
 	/**
@@ -2982,106 +2284,13 @@ export class TokenScoreboard {
 	 * Call this whenever bolts get misplaced during transitions
 	 */
 	fixBoltPositions() {
-		if (!this.cornerBolts || this.cornerBolts.length < 4) return;
-		
-		const halfWidth = this.width / 2;
-		const halfHeight = this.height / 2;
-		
-		// Find bolts by their side property
-		const rightBolts = this.cornerBolts.filter(bolt => bolt.userData.isRightSide);
-		const leftBolts = this.cornerBolts.filter(bolt => !bolt.userData.isRightSide);
-		
-		// Track position changes for animation effects
-		let significantChange = false;
-		
-		// Process top/bottom for both sides
-		rightBolts.forEach(bolt => {
-			// Determine if this is a top or bottom bolt based on current position
-			const isTopBolt = bolt.position.y > 0;
-			const yPos = isTopBolt ? (halfHeight + 0.1) : (-halfHeight - 0.1);
-			
-			// Store original position for comparison
-			const originalX = bolt.position.x;
-			const originalY = bolt.position.y;
-			
-			// Set position explicitly - always on right side
-			bolt.position.set(halfWidth + 0.45, yPos, -0.2);
-			bolt.visible = true;
-			
-			// Check if position changed significantly
-			if (Math.abs(originalX - bolt.position.x) > 0.001 || 
-				Math.abs(originalY - bolt.position.y) > 0.001) {
-				significantChange = true;
-			}
-			
-			// Update plate position if it exists
-			if (bolt.userData.plate) {
-				bolt.userData.plate.position.set(halfWidth + 0.45, yPos, -0.1);
-				bolt.userData.plate.visible = true;
-			}
-			
-			// Ensure color is set correctly
-			if (bolt.material) {
-				bolt.material.color.set(0xDAA520); // Gold for right
-				bolt.material.emissive.set(0xDAA520);
-			}
-		});
-		
-		leftBolts.forEach(bolt => {
-			// Determine if this is a top or bottom bolt based on current position
-			const isTopBolt = bolt.position.y > 0;
-			const yPos = isTopBolt ? (halfHeight + 0.1) : (-halfHeight - 0.1);
-			
-			// Store original position for comparison
-			const originalX = bolt.position.x;
-			const originalY = bolt.position.y;
-			
-			// Set position explicitly - always on left side
-			bolt.position.set(-halfWidth - 0.45, yPos, -0.2);
-			bolt.visible = true;
-			
-			// Check if position changed significantly
-			if (Math.abs(originalX - bolt.position.x) > 0.001 || 
-				Math.abs(originalY - bolt.position.y) > 0.001) {
-				significantChange = true;
-			}
-			
-			// Update plate position if it exists
-			if (bolt.userData.plate) {
-				bolt.userData.plate.position.set(-halfWidth - 0.45, yPos, -0.1);
-				bolt.userData.plate.visible = true;
-			}
-			
-			// Ensure color is set correctly
-			if (bolt.material) {
-				bolt.material.color.set(0x00ff00); // Green for left
-				bolt.material.emissive.set(0x00ff00);
-			}
-		});
-		
-		// Always force sync jets after bolt positions are fixed
-		if (this.jetsManager) {
-			// Use forced sync when positions were changed significantly
-			this.jetsManager.syncJetsWithBolts(significantChange);
-			
-			// If positions changed significantly and we're not in hidden mode, trigger jet effect
-			if (significantChange && this.sizeMode !== 'hidden') {
-				console.log("Significant bolt position change detected - triggering jet effect");
-				this.triggerJetEffect(0.8); // Increased from 0.7 for more visibility
-				
-				// Additional sync after a short delay to ensure particles follow the bolts
-				setTimeout(() => {
-					if (this.jetsManager) {
-						this.jetsManager.syncJetsWithBolts(true);
-					}
-				}, 50);
-			}
-		}
-		
-		// Log bolt positions for debugging
-		console.log("Bolt positions after fixBoltPositions:");
-		this.cornerBolts.forEach((bolt, i) => {
-			console.log(`Bolt ${i}: x=${bolt.position.x.toFixed(2)}, y=${bolt.position.y.toFixed(2)}, isRightSide=${bolt.userData.isRightSide}, visible=${bolt.visible}`);
+		// Use the common implementation from physical-effects.js
+		return fixBoltPositions({
+			cornerBolts: this.cornerBolts,
+			width: this.width,
+			height: this.height,
+			jetsManager: this.jetsManager,
+			sizeMode: this.sizeMode
 		});
 	}
 
@@ -3114,4 +2323,94 @@ export class TokenScoreboard {
 			}
 		}
 	}
-} 
+
+	/**
+	 * Draw the scrolling token list on the LED display
+	 * Called each frame when in normal mode (not detail mode)
+	 * @private
+	 */
+	_drawScrollingTokenList() {
+		// Skip if no display or no tokens
+		if (!this.ledDisplay) return;
+		
+		// If we have no display data, show a message
+		if (!this.displayData || this.displayData.length === 0) {
+			this.ledDisplay.drawText('LOADING TOKEN DATA...', 2, 2, 'cyan');
+			return;
+		}
+		
+		// Reference to tokens for easier readability
+		this.tokens = this.displayData;
+		
+		// Update scroll position for animation
+		this.scrollPosition += this.scrollSpeed;
+		if (this.scrollPosition >= (this.tokens.length - maxVisible * 0.5) * 12) {
+			this.scrollPosition = 0;
+		}
+		
+		// Calculate visible token range - show up to 6 tokens at once
+		const maxVisible = this.ledDisplay.dotRows >= 30 ? 5 : (this.ledDisplay.dotRows >= 20 ? 3 : 2);
+		const startIdx = Math.floor(this.scrollPosition / 12);
+		let visibleTokens = 0;
+		
+		// Draw each visible token
+		for (let i = 0; i < maxVisible + 2; i++) {
+			const idx = (startIdx + i) % this.tokens.length;
+			const token = this.tokens[idx];
+			if (!token) continue;
+			
+			// Calculate row position based on index and scroll position
+			const rowOffsetFraction = (this.scrollPosition % 12) / 12;
+			const rowStart = Math.floor(i * 12 - rowOffsetFraction * 12) + 2;
+			
+			// Skip if token would be completely off-screen
+			if (rowStart < -12 || rowStart >= this.ledDisplay.dotRows) continue;
+			
+			// Draw using ledDisplay's drawTokenInfo method if available
+			if (typeof this.ledDisplay.drawTokenInfo === 'function') {
+				this.ledDisplay.drawTokenInfo(token, rowStart);
+			} else {
+				// Otherwise implement a simple display
+				// Show symbol in cyan, price in yellow, and change in red/green
+				const symbol = token.symbol || 'UNKN';
+				const price = formatPrice(token.price || 0);
+				const change = token.change !== undefined ? token.change : 0;
+				const changeColor = getChangeColor(change);
+				
+				// Draw symbol
+				this.ledDisplay.drawText(symbol, rowStart, 2, 'cyan');
+				
+				// Draw price
+				this.ledDisplay.drawText('$' + price, rowStart + 6, 2, 'yellow');
+				
+				// Draw change percentage
+				const changeText = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+				this.ledDisplay.drawText(changeText, rowStart + 6, 50, changeColor);
+			}
+			
+			visibleTokens++;
+		}
+		
+		// If no tokens could be drawn, show a message
+		if (visibleTokens === 0) {
+			this.ledDisplay.drawText('NO TOKEN DATA', 2, 10, 'red');
+		}
+	}
+
+	/**
+	 * Update social button positions only if needed (determined by interval)
+	 * @param {boolean} force Force update regardless of timer
+	 */
+	updateSocialButtonPositionsIfNeeded(force = false) {
+		if (!this.socialButtonManager) return;
+		
+		const currentTime = Date.now();
+		const timeSinceLastUpdate = currentTime - this.lastSocialButtonPositionTime;
+		
+		// Update positions if forced or interval has passed
+		if (force || timeSinceLastUpdate > this.socialButtonPositionInterval) {
+			this.socialButtonManager.positionButtonsAbove(this.width, this.height, 0);
+			this.lastSocialButtonPositionTime = currentTime;
+		}
+	}
+} // This closes the class TokenScoreboard

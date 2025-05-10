@@ -60,16 +60,39 @@ export function formatChangePrice(price) {
 /**
  * Format percentage change with sign and fixed precision
  * @param {number|string} change - The percentage change
+ * @param {boolean} noSign - Whether to omit the sign
+ * @param {boolean} compact - Whether to use a more compact format for LED display
  * @returns {string} Formatted change string with sign and % symbol
  */
-export function formatChange(change, noSign = false) {
+export function formatChange(change, noSign = false, compact = false) {
 	const numChange = typeof change === 'string' ? parseFloat(change) : change;
 	
 	if (isNaN(numChange)) {
-		return "+0.00%";
+		return noSign ? "0.00" : "+0.00%";
 	}
 	
 	const sign = noSign ? '' : numChange >= 0 ? '+' : '-';
+	
+	// For compact display, use more optimized formatting
+	if (compact) {
+		// For very small changes, show fewer decimals
+		if (Math.abs(numChange) < 0.01) {
+			return `${sign}0.00%`;
+		}
+		// For values between 0.01 and 1, show 2 decimals
+		else if (Math.abs(numChange) < 1) {
+			return `${sign}${Math.abs(numChange).toFixed(2)}%`;
+		}
+		// For values between 1 and 10, show 1 decimal
+		else if (Math.abs(numChange) < 10) {
+			return `${sign}${Math.abs(numChange).toFixed(1)}%`;
+		}
+		// For values over 10, show no decimals
+		else {
+			return `${sign}${Math.round(Math.abs(numChange))}%`;
+		}
+	}
+	
 	const value = formatChangePrice(Math.abs(numChange));
 	return `${sign}${value}` + (noSign ? '' : '%');
 }
@@ -82,73 +105,6 @@ export function formatChange(change, noSign = false) {
 export function getChangeColor(change) {
 	const numChange = typeof change === 'string' ? parseFloat(change) : change;
 	return !isNaN(numChange) && numChange >= 0 ? 'green' : 'red';
-}
-
-/**
- * Easing function for smooth animations
- * @param {number} t - Progress value between 0 and 1
- * @returns {number} Eased value
- */
-export function easeInOutQuad(t) {
-	return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-}
-
-/**
- * Clamp a value between min and max
- * @param {number} value - The value to clamp
- * @param {number} min - Minimum allowed value
- * @param {number} max - Maximum allowed value
- * @returns {number} Clamped value
- */
-export function clamp(value, min, max) {
-	return Math.min(Math.max(value, min), max);
-}
-
-/**
- * Calculate a horizontal spread factor based on screen width
- * @param {number} screenWidth - The screen width in pixels
- * @returns {number} Appropriate horizontal spread factor
- */
-export function calculateHorizontalSpreadFactor(screenWidth) {
-	const isVeryNarrowScreen = screenWidth < 600;  // Mobile phones
-	const isNarrowScreen = screenWidth < 750 && !isVeryNarrowScreen; // Small tablets
-	
-	let horizontalSpreadFactor = 0.35; // Default: use 35% of the screen width from center
-	
-	if (isVeryNarrowScreen) {
-		// For very narrow screens, calculate a more aggressive reduction
-		const narrowRatio = screenWidth / 600; // 600px as reference
-		horizontalSpreadFactor = 0.35 * narrowRatio * 0.9;
-		
-		// Ensure the spread is not too small (at least 15% of view width)
-		horizontalSpreadFactor = Math.max(0.15, horizontalSpreadFactor);
-	} 
-	else if (isNarrowScreen) {
-		// Use a smaller spread on narrow screens
-		const narrowRatio = screenWidth / 750; // 750px as reference
-		horizontalSpreadFactor = 0.35 * (0.8 + narrowRatio * 0.2); // Scale between 0.28-0.35
-	}
-	
-	return horizontalSpreadFactor;
-}
-
-/**
- * Calculate scale factor based on screen width
- * @param {number} screenWidth - The screen width in pixels
- * @returns {number} Appropriate scale factor
- */
-export function calculateScaleFactor(screenWidth) {
-	const isVeryNarrowScreen = screenWidth < 600;  // Mobile phones
-	
-	let scale = 0.3; // Default scale
-	if (isVeryNarrowScreen) {
-		// Use pixel width-based scaling for very narrow screens
-		const narrowRatio = screenWidth / 600; // Use 600px as reference width
-		scale = 0.3 * narrowRatio;
-		scale = clamp(scale, 0.18, 0.3); // Clamp between 0.18 and 0.3
-	}
-	
-	return scale;
 }
 
 /**

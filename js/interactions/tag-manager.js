@@ -163,6 +163,22 @@ export class TagManager {
 		});
 	}
 	
+
+	getChainColour(chainId) {
+		const chainColours = {
+			'ethereum': '#3C3C3D', // Dark grey for Ethereum
+			'binance-smart-chain': '#F0B90B', // Yellow for BSC
+			'polygon': '#8247E5', // Purple for Polygon
+			'avalanche': '#E84142', // Red for Avalanche
+			'optimism': '#FF0420', // Bright red for Optimism
+			'arbitrum': '#28A0F0', // Blue for Arbitrum
+			'solana': '#14F195', // Bright teal for Solana
+			'base': '#0052FF' // Bright blue for Base
+		};
+		return chainColours[chainId?.toLowerCase()] || '#FFFFFF'; // Default to white if chain not found
+	}
+
+
 	/**
 	 * Create a new tag
 	 * @param {string} name - Tag name (will add $ prefix if not present)
@@ -219,6 +235,9 @@ export class TagManager {
 			depth: options.depth || this.tagStyle.depth,
 		};
 		
+		// Get chain colour
+		const chainColour = tokenData?.chainId ? this.getChainColour(tokenData?.chainId) : this.options.defaultColor;
+
 		// Create geometry for the tag
 		try {
 			const geometry = new TextGeometry(displayName, {
@@ -242,7 +261,7 @@ export class TagManager {
 			
 			// Create material with slight random color variation for visual interest
 			const colorVariance = this.options.colorVariance;
-			const color = new THREE.Color(this.options.defaultColor);
+			const color = new THREE.Color(chainColour);
 			
 			// Apply slight random variation to color
 			color.r += (Math.random() * 2 - 1) * colorVariance;
@@ -901,5 +920,58 @@ export class TagManager {
 			createdAt: tag.createdAt || Date.now(),
 			updatedAt: Date.now()
 		};
+	}
+	
+	/**
+	 * Highlight a token in the tag cube by its address
+	 * @param {string} tokenAddress - The token address to highlight
+	 * @returns {boolean} - Whether a matching tag was found and highlighted
+	 */
+	highlightToken(tokenAddress) {
+		if (!tokenAddress) {
+			console.warn('Attempted to highlight token with empty address');
+			return false;
+		}
+		
+		console.log(`Attempting to highlight token with address: ${tokenAddress}`);
+		
+		// Normalize the address
+		const normalizedAddress = tokenAddress.toLowerCase();
+		
+		// Find all tags with matching token address
+		const matchingTags = this.tags.filter(tag => {
+			if (!tag.tokenData) return false;
+			
+			// Check different possible structures for token address
+			const tagAddress = 
+				(tag.tokenData.tokenAddress || 
+				tag.tokenData.address || 
+				(tag.tokenData.baseToken && tag.tokenData.baseToken.address) || 
+				'').toLowerCase();
+			
+			return tagAddress === normalizedAddress;
+		});
+		
+		if (matchingTags.length === 0) {
+			console.log(`No tags found with address: ${normalizedAddress}`);
+			return false;
+		}
+		
+		console.log(`Found ${matchingTags.length} tags matching address: ${normalizedAddress}`);
+		
+		// Highlight the first matching tag
+		const tagToHighlight = matchingTags[0];
+		
+		// Apply visual highlight effect
+		this.pulseTag(tagToHighlight);
+		
+		// Update the last interaction time
+		tagToHighlight.lastInteractionTime = Date.now();
+		
+		// Log the highlighted tag
+		console.log(`Highlighted tag: ${tagToHighlight.name || 'Unnamed Tag'}`);
+		
+		// Return true to indicate a tag was found and highlighted
+		return true;
 	}
 } 

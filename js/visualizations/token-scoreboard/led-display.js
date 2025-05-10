@@ -23,10 +23,10 @@ export class LEDDisplay {
 	 * @returns {{dotRows: number, dotSpacing: number}}
 	 */
 	static calculateDotLayout(width, height, dotCols) {
-		const totalWidth = width * 0.98;
+		const totalWidth = width * 1.05;
 		const totalHeight = height * 0.9;
 		const baseSpacing = (totalWidth / dotCols) * 1.1;
-		let dotRows = Math.max(1, Math.floor((height * 1.1) / baseSpacing));
+		let dotRows = Math.max(1, Math.floor((height * 1.15) / baseSpacing));
 		let dotSpacing = Math.min(totalWidth / dotCols, totalHeight / dotRows) * 1.3;
 		if (!isFinite(dotSpacing) || dotSpacing <= 0) dotSpacing = 1;
 		if (!isFinite(dotRows) || dotRows < 1) dotRows = 1;
@@ -90,16 +90,24 @@ export class LEDDisplay {
 		this.dotSpacing = layout.dotSpacing;
 		this.dotSize = this.dotSpacing * 2;
 		const startX = -totalWidth / 2 + this.dotSpacing / 2 - 1.2;
-		const startY = -totalHeight / 2 + this.dotSpacing / 2 - 0.25;
+		const startY = -totalHeight / 1.88;
 		this.dots = Array(this.dotRows).fill().map(() => Array(this.dotCols).fill(null));
 		for (let row = 0; row < this.dotRows; row++) {
 			for (let col = 0; col < this.dotCols; col++) {
 				const dot = new THREE.Mesh(dotGeometry, this.dotMaterials.off);
 				dot.position.x = startX + col * this.dotSpacing * 0.9;
-				dot.position.y = startY + row * this.dotSpacing * 0.9;
+				dot.position.y = startY + row * this.dotSpacing * 0.88;
 				dot.position.z = 0;
 				dot.rotation.y = Math.PI;
 				dot.scale.set(this.dotSize, this.dotSize, 1);
+				
+				// Store row and column information for interaction
+				dot.userData = {
+					row: row,
+					col: col,
+					isLED: true  // Mark this as an LED dot for easy identification
+				};
+				
 				this.dots[row][col] = dot;
 				this.ledGroup.add(dot);
 			}
@@ -569,30 +577,88 @@ export class LEDDisplay {
 	 * @param {number} row - Starting row on the display
 	 */
 	drawTokenInfo(token, row) {
-		// Draw token symbol
-		let currentCol = 2;
-		currentCol = this.drawText('$' + token.symbol, row, currentCol, 'cyan');
+		// Ensure row is visible and in bounds
+		if (row < -CHAR_HEIGHT || row >= this.dotRows) {
+			return; // Skip tokens that would be completely off-screen
+		}
 		
-		// Add separator - increase the gap between elements
-		currentCol += CHAR_TOTAL_WIDTH;
+		// First clear the area where we'll draw to avoid overlapping text
+		const totalRows = CHAR_HEIGHT * 2 + 2; // Space for two rows of text plus spacing
+		const clearWidth = this.dotCols;
+		
+		for (let r = 0; r < totalRows; r++) {
+			if (row + r >= 0 && row + r < this.dotRows) {
+				for (let c = 0; c < clearWidth; c++) {
+					this.setDotColor(row + r, c, 'off');
+				}
+			}
+		}
+		
+		// Draw token symbol on the left
+		const symbolText = '$' + token.symbol;
+		this.drawText(symbolText, row, 2, 'cyan');
 		
 		// Format price using utility function
-		const priceText = formatPrice(token.price);
+		const priceText = '$' + formatPrice(token.price);
 		
-		// Draw price in yellow - increase vertical spacing between symbol and price
-		const VERTICAL_SPACING = CHAR_HEIGHT + 1; // one blank row between lines
-		currentCol = this.drawText('$' + priceText, row + VERTICAL_SPACING, 2, 'yellow');
+		// Calculate position to right-align the price
+		const rightPriceCol = this.dotCols - (priceText.length * CHAR_TOTAL_WIDTH) - 2;
 		
-		// Get change color and format change text using utility functions
-		const changeColor = getChangeColor(token.change);
-		const changeText = formatChange(token.change);
+		// Draw right-aligned price on the same line as symbol
+		if (row >= -CHAR_HEIGHT && row < this.dotRows) {
+			this.drawText(priceText, row, rightPriceCol, 'yellow');
+		}
 		
-		// Calculate the right-aligned position
-		const changeTextWidth = changeText.length * CHAR_TOTAL_WIDTH;
-		const RIGHT_MARGIN = 0;//CHAR_TOTAL_WIDTH * 3; // keep a 3-character margin from edge
-		const rightAlignedCol = this.dotCols - changeTextWidth - RIGHT_MARGIN;
+		// Determine if enough space for second line (more important in normal mode)
+		const isTallDisplay = this.dotRows >= 50;
 		
-		this.drawText(changeText, row + VERTICAL_SPACING, rightAlignedCol, changeColor);
+		// Move to next line for percentage changes
+		const changeRow = row + CHAR_HEIGHT + 1;
+		
+		// Skip if change row would be completely off screen
+		if (changeRow < -CHAR_HEIGHT || changeRow >= this.dotRows) {
+			return;
+		}
+		
+		// Extract changes from token data or use defaults
+		const change5m = token.change5m !== undefined ? token.change5m : 0;
+		const change1h = token.change1h !== undefined ? token.change1h : 0;
+		const change24h = token.change !== undefined ? token.change : 0; // Original change is 24h
+
+		// Format and color the change values - use compact format to save space
+		const change5mText = formatChange(change5m, false, true);
+		const change1hText = formatChange(change1h, false, true);
+		const change24hText = formatChange(change24h, false, true);
+		
+		const color5m = getChangeColor(change5m);
+		const color1h = getChangeColor(change1h);
+		const color24h = getChangeColor(change24h);
+		
+		// Calculate positions with even spacing and no labels
+		// Left position for 5m change
+		const leftCol = 2;
+		
+		// Right position for 24h change
+		const rightCol = this.dotCols - (change24hText.length * CHAR_TOTAL_WIDTH) - 2;
+		
+		// Middle position centered using predetermined position
+		const middleCol = Math.floor(this.dotCols/2) - Math.floor(CHAR_TOTAL_WIDTH * 3);
+		
+		// Draw changes with no labels for a cleaner display
+		this.drawText(change5mText, changeRow, leftCol, color5m);
+		this.drawText(change1hText, changeRow, middleCol, color1h);
+		this.drawText(change24hText, changeRow, rightCol, color24h);
+		
+		// Add visual separator in tall mode to improve readability
+		if (isTallDisplay) {
+			const separatorRow = changeRow + CHAR_HEIGHT + 1;
+			if (separatorRow < this.dotRows && separatorRow >= 0) {
+				// Draw a subtle separator line
+				for (let i = 0; i < 5; i++) {
+					this.setDotColor(separatorRow, this.dotCols/2 - 2 + i, 'off');
+				}
+			}
+		}
 	}
 	
 	/**

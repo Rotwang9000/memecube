@@ -57,8 +57,10 @@ function createPaths( text, size, data ) {
 		} else {
 
 			const ret = createPath( char, scale, offsetX, offsetY, data );
-			offsetX += ret.offsetX;
-			paths.push( ret.path );
+			if (ret) {
+				offsetX += ret.offsetX;
+				paths.push( ret.path );
+			}
 
 		}
 
@@ -70,11 +72,11 @@ function createPaths( text, size, data ) {
 
 function createPath( char, scale, offsetX, offsetY, data ) {
 
-	const glyph = data.glyphs[ char ] || data.glyphs[ '?' ];
+	const glyph = data.glyphs[char] || data.glyphs[char.codePointAt(0)] || data.glyphs[ '?' ];
 
 	if ( ! glyph ) {
 
-		console.error( 'THREE.Font: character "' + char + '" does not exists in font family ' + data.familyName + '.' );
+		console.error( 'THREE.Font: character "' + char + '"(' + char.codePointAt(0) + ') does not exists in font family ' + data.familyName + '.', data );
 
 		return;
 

@@ -660,7 +660,7 @@ export class TagPhysics {
         
         // Calculate total time and log if it's too high  
         perfMetrics.total = performance.now() - perfStart;
-        if (perfMetrics.total > 10) { // Log if over 10ms
+        if (perfMetrics.total > 100) { // Log if over 100ms
             console.log('Physics performance:', perfMetrics);
         }
     }

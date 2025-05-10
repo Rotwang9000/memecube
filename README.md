@@ -256,6 +256,37 @@ This provides better visibility when new tokens are added to the cube, whether f
 - System messages (like "Removed X tokens from the cube") now remain visible for 5 seconds instead of 3, giving users more time to read them.
 - All temporary messages use a fade-in/fade-out animation for a smoother user experience.
 
+## Token Sponsorship System
+
+### Sponsored Tokens Feature
+The platform now supports token sponsorships that highlight specific tokens:
+
+- Users can sponsor any token visible in the platform or add new ones
+- Each 0.1 SOL payment provides a 6-hour sponsorship period
+- Sponsored tokens appear larger and with a gold colour in the isometric cluster
+- Multiple people can sponsor the same token, with effects stacking for greater visibility
+- Sponsorship options:
+  - Increase Size: Make the token larger and more prominent
+  - Extend Duration: Keep the current size boost for a longer period
+
+### Sponsorship UI
+The sponsorship system includes a user-friendly interface:
+
+- "Sponsor Tokens" button in the top-right corner opens the sponsorship modal
+- Token search functionality to find any token from DexScreener
+- Payment amount selection with 0.1 SOL minimum
+- Option to either increase token size or extend sponsorship duration
+- Wallet integration for payment processing
+- "Sponsored" button shows a list of all currently sponsored tokens
+
+### Sponsored Token Visual Effects
+Sponsored tokens receive special visual treatment:
+
+- Gold coloration with subtle glow effect
+- Size boost proportional to sponsorship amount
+- Higher visual priority, always appearing in the outer layer of the isometric cluster
+- Visibility across all site visitors during the sponsorship period
+
 ## 3D Coordinate System Notes
 
 When working with the 3D visualizations in this project (particularly the token scoreboard), be aware of the following coordinate system conventions:

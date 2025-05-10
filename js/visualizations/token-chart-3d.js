@@ -368,7 +368,7 @@ export class TokenChart3D {
 		
 		// Load font for labels
 		const loader = new FontLoader();
-		loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+		loader.load('https://threejs.org/examples/fonts/helvetiker_bold.typeface.json', (font) => {
 			// Add token title
 			this.addChartTitle('PRICE CHART', font);
 			
@@ -883,7 +883,7 @@ export class TokenChart3D {
 		// If title mesh already exists, update it
 		if (this.titleText) {
 			const loader = new FontLoader();
-			loader.load('https://threejs.org/examples/fonts/helvetiker_regular.typeface.json', (font) => {
+			loader.load('https://threejs.org/examples/fonts/helvetiker_bold.typeface.json', (font) => {
 				this.addChartTitle(this.pendingTitleSymbol, font);
 			});
 		}

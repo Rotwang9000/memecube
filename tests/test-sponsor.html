@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Sponsored Token Test</title>
+	<style>
+		body {
+			font-family: Arial, sans-serif;
+			margin: 0;
+			padding: 20px;
+			background-color: #1a1a2e;
+			color: #f0f0f0;
+		}
+		h1 {
+			margin-bottom: 20px;
+			color: #4cc9f0;
+		}
+		.container {
+			max-width: 800px;
+			margin: 0 auto;
+		}
+		.card {
+			background-color: #0f3460;
+			border-radius: 8px;
+			padding: 20px;
+			margin-bottom: 20px;
+			box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+		}
+		button {
+			background-color: #4cc9f0;
+			color: #0f3460;
+			border: none;
+			padding: 10px 20px;
+			border-radius: 4px;
+			cursor: pointer;
+			font-weight: bold;
+			margin-bottom: 10px;
+		}
+		button:hover {
+			background-color: #3da8f0;
+		}
+		button:disabled {
+			background-color: #cccccc;
+			cursor: not-allowed;
+			opacity: 0.7;
+		}
+		input, select {
+			padding: 8px;
+			margin-bottom: 10px;
+			border-radius: 4px;
+			border: 1px solid #ccc;
+			width: 100%;
+		}
+		.sponsored-token {
+			display: flex;
+			align-items: center;
+			padding: 10px;
+			margin-bottom: 10px;
+			background-color: #16213e;
+			border-radius: 4px;
+			border: 1px solid #ffd700;
+		}
+		.token-icon {
+			width: 40px;
+			height: 40px;
+			border-radius: 50%;
+			margin-right: 15px;
+			background-color: #ffd700;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-weight: bold;
+		}
+		.token-info {
+			flex-grow: 1;
+		}
+		.gold {
+			color: #ffd700;
+		}
+		.log-area {
+			background-color: #16213e;
+			border-radius: 4px;
+			padding: 10px;
+			height: 200px;
+			overflow-y: auto;
+			font-family: monospace;
+			margin-bottom: 10px;
+		}
+		.log-entry {
+			margin-bottom: 5px;
+			border-bottom: 1px solid #333;
+			padding-bottom: 5px;
+		}
+		.success {
+			color: #4CAF50;
+		}
+		.error {
+			color: #F44336;
+		}
+		.warning {
+			color: #FFC107;
+		}
+		.wallet-status {
+			margin-bottom: 15px;
+			padding: 10px;
+			background-color: #16213e;
+			border-radius: 4px;
+		}
+		.connected {
+			border-left: 4px solid #4CAF50;
+		}
+		.disconnected {
+			border-left: 4px solid #F44336;
+		}
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h1>Sponsored Token Test</h1>
+		
+		<div class="card">
+			<h2>Wallet Connection</h2>
+			<div id="wallet-status" class="wallet-status disconnected">
+				<strong>Status:</strong> Not connected
+			</div>
+			<button id="connect-wallet-btn">Connect Phantom Wallet</button>
+		</div>
+		
+		<div class="card">
+			<h2>Sponsor a Token</h2>
+			<div>
+				<label for="token-symbol">Token Symbol:</label>
+				<input type="text" id="token-symbol" placeholder="E.g., PEPE">
+			</div>
+			<div>
+				<label for="token-address">Token Address:</label>
+				<input type="text" id="token-address" placeholder="0x...">
+			</div>
+			<div>
+				<label for="chain-id">Chain ID:</label>
+				<select id="chain-id">
+					<option value="eth">Ethereum</option>
+					<option value="bsc">Binance Smart Chain</option>
+					<option value="arbitrum">Arbitrum</option>
+					<option value="sol">Solana</option>
+				</select>
+			</div>
+			<div>
+				<label for="amount">Amount (SOL):</label>
+				<input type="number" id="amount" min="0.1" step="0.1" value="0.1">
+			</div>
+			<div>
+				<label for="sponsor-option">Sponsorship Option:</label>
+				<select id="sponsor-option">
+					<option value="size">Increase Size</option>
+					<option value="time">Extend Duration</option>
+				</select>
+			</div>
+			<button id="sponsor-btn" disabled>Sponsor Token</button>
+		</div>
+		
+		<div class="card">
+			<h2>Your Sponsored Tokens</h2>
+			<div id="sponsored-tokens-list">
+				<p>No sponsored tokens yet.</p>
+			</div>
+		</div>
+		
+		<div class="card">
+			<h2>Test Actions</h2>
+			<button id="add-demo-btn" disabled>Add Demo Token</button>
+			<button id="clear-all-btn">Clear All Sponsorships</button>
+		</div>
+		
+		<div class="card">
+			<h2>Event Log</h2>
+			<div class="log-area" id="log-area"></div>
+			<button id="clear-log-btn">Clear Log</button>
+		</div>
+	</div>
+	
+	<script type="module">
+		import { SponsoredTokenService } from '../js/services/SponsoredTokenService.js';
+		import { SolanaWalletService } from '../js/services/SolanaWalletService.js';
+		
+		// Create services
+		const sponsorService = new SponsoredTokenService();
+		const walletService = new SolanaWalletService();
+		
+		// UI elements
+		const tokenSymbolInput = document.getElementById('token-symbol');
+		const tokenAddressInput = document.getElementById('token-address');
+		const chainIdSelect = document.getElementById('chain-id');
+		const amountInput = document.getElementById('amount');
+		const sponsorOptionSelect = document.getElementById('sponsor-option');
+		const sponsorBtn = document.getElementById('sponsor-btn');
+		const sponsoredTokensList = document.getElementById('sponsored-tokens-list');
+		const addDemoBtn = document.getElementById('add-demo-btn');
+		const clearAllBtn = document.getElementById('clear-all-btn');
+		const logArea = document.getElementById('log-area');
+		const clearLogBtn = document.getElementById('clear-log-btn');
+		const walletStatusEl = document.getElementById('wallet-status');
+		const connectWalletBtn = document.getElementById('connect-wallet-btn');
+		
+		// Current user address
+		let userAddress = null;
+		
+		// Initialize
+		updateWalletStatus();
+		updateSponsoredTokensList();
+		
+		// Event listeners
+		connectWalletBtn.addEventListener('click', connectWallet);
+		sponsorBtn.addEventListener('click', sponsorToken);
+		addDemoBtn.addEventListener('click', addDemoToken);
+		clearAllBtn.addEventListener('click', clearAllSponsorships);
+		clearLogBtn.addEventListener('click', () => logArea.innerHTML = '');
+		
+		// Set up wallet connection listeners
+		walletService.addConnectionListener((address) => {
+			userAddress = address;
+			updateWalletStatus();
+			updateSponsoredTokensList();
+			logEvent(`Wallet connected: ${shortenAddress(address)}`, 'success');
+		});
+		
+		walletService.addDisconnectionListener(() => {
+			userAddress = null;
+			updateWalletStatus();
+			updateSponsoredTokensList();
+			logEvent('Wallet disconnected', 'warning');
+		});
+		
+		// Connect wallet
+		async function connectWallet() {
+			try {
+				if (walletService.isConnected) {
+					// Disconnect if already connected
+					await walletService.disconnect();
+					return;
+				}
+				
+				// Check if Phantom is installed
+				if (!walletService.isPhantomInstalled()) {
+					logEvent('Phantom wallet not found. Please install it first.', 'error');
+					window.open('https://phantom.app/', '_blank');
+					return;
+				}
+				
+				logEvent('Connecting to wallet...', 'info');
+				await walletService.connect();
+			} catch (error) {
+				logEvent(`Error: ${error.message}`, 'error');
+			}
+		}
+		
+		// Update wallet status UI
+		function updateWalletStatus() {
+			const isConnected = walletService.isConnected;
+			
+			// Update status display
+			walletStatusEl.className = `wallet-status ${isConnected ? 'connected' : 'disconnected'}`;
+			
+			if (isConnected && userAddress) {
+				walletStatusEl.innerHTML = `<strong>Status:</strong> Connected<br><strong>Address:</strong> ${shortenAddress(userAddress)}`;
+				connectWalletBtn.textContent = 'Disconnect Wallet';
+			} else {
+				walletStatusEl.innerHTML = '<strong>Status:</strong> Not connected';
+				connectWalletBtn.textContent = 'Connect Phantom Wallet';
+			}
+			
+			// Update button states
+			sponsorBtn.disabled = !isConnected;
+			addDemoBtn.disabled = !isConnected;
+		}
+		
+		// Sponsor a token
+		async function sponsorToken() {
+			if (!userAddress) {
+				logEvent('Please connect your wallet first', 'error');
+				return;
+			}
+			
+			const symbol = tokenSymbolInput.value.trim();
+			const tokenAddress = tokenAddressInput.value.trim();
+			const chainId = chainIdSelect.value;
+			const amount = parseFloat(amountInput.value);
+			const extendTime = sponsorOptionSelect.value === 'time';
+			
+			try {
+				// Validate input
+				if (!symbol) {
+					throw new Error('Token symbol is required');
+				}
+				
+				if (!tokenAddress) {
+					throw new Error('Token address is required');
+				}
+				
+				if (isNaN(amount) || amount < 0.1) {
+					throw new Error('Minimum amount is 0.1 SOL');
+				}
+				
+				// Create token object
+				const token = {
+					symbol: symbol,
+					baseToken: {
+						symbol: symbol
+					},
+					chainId: chainId,
+					tokenAddress: tokenAddress
+				};
+				
+				// Process payment
+				logEvent(`Processing payment of ${amount} SOL...`, 'info');
+				
+				// Simulate payment transaction
+				const paymentResult = await walletService.simulatePayment(amount);
+				
+				if (!paymentResult || !paymentResult.success) {
+					throw new Error('Payment failed');
+				}
+				
+				logEvent(`Payment successful! Transaction ID: ${shortenAddress(paymentResult.transactionId)}`, 'success');
+				
+				// Sponsor the token
+				const result = sponsorService.sponsorToken(token, userAddress, amount, extendTime);
+				
+				// Log success
+				logEvent(`Sponsored ${symbol} with ${amount} SOL (${extendTime ? 'Extended Time' : 'Increased Size'})`, 'success');
+				
+				// Clear form
+				tokenSymbolInput.value = '';
+				tokenAddressInput.value = '';
+				
+				// Update the list
+				updateSponsoredTokensList();
+				
+			} catch (error) {
+				// Log error
+				logEvent(`Error: ${error.message}`, 'error');
+			}
+		}
+		
+		// Add a demo token
+		async function addDemoToken() {
+			if (!userAddress) {
+				logEvent('Please connect your wallet first', 'error');
+				return;
+			}
+			
+			try {
+				// Demo tokens
+				const demoTokens = [
+					{
+						symbol: 'PEPE',
+						baseToken: { symbol: 'PEPE' },
+						chainId: 'eth',
+						tokenAddress: '0x6982508145454ce325ddbe47a25d4ec3d2311933'
+					},
+					{
+						symbol: 'DOGE',
+						baseToken: { symbol: 'DOGE' },
+						chainId: 'eth',
+						tokenAddress: '0x4206931337dc273a630d328da6441786bfad668f'
+					},
+					{
+						symbol: 'BONK',
+						baseToken: { symbol: 'BONK' },
+						chainId: 'sol',
+						tokenAddress: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263'
+					}
+				];
+				
+				// Choose a random demo token
+				const token = demoTokens[Math.floor(Math.random() * demoTokens.length)];
+				
+				// Amount to sponsor
+				const amount = 0.1 + Math.floor(Math.random() * 5) / 10; // 0.1 to 0.5 SOL
+				const extendTime = Math.random() > 0.5;
+				
+				// Process payment
+				logEvent(`Processing payment of ${amount} SOL...`, 'info');
+				
+				// Simulate payment transaction
+				const paymentResult = await walletService.simulatePayment(amount);
+				
+				if (!paymentResult || !paymentResult.success) {
+					throw new Error('Payment failed');
+				}
+				
+				logEvent(`Payment successful! Transaction ID: ${shortenAddress(paymentResult.transactionId)}`, 'success');
+				
+				// Sponsor the token
+				const result = sponsorService.sponsorToken(token, userAddress, amount, extendTime);
+				
+				// Log success
+				logEvent(`Added demo token ${token.symbol} with ${amount} SOL (${extendTime ? 'Extended Time' : 'Increased Size'})`, 'success');
+				
+				// Update the list
+				updateSponsoredTokensList();
+				
+			} catch (error) {
+				// Log error
+				logEvent(`Error: ${error.message}`, 'error');
+			}
+		}
+		
+		// Clear all sponsorships
+		function clearAllSponsorships() {
+			try {
+				// Clear the sponsorships
+				sponsorService.sponsoredTokens.clear();
+				
+				// Save to localStorage
+				sponsorService.saveSponsorshipsToStorage();
+				
+				// Log success
+				logEvent('Cleared all sponsorships', 'warning');
+				
+				// Update the list
+				updateSponsoredTokensList();
+				
+			} catch (error) {
+				// Log error
+				logEvent(`Error: ${error.message}`, 'error');
+			}
+		}
+		
+		// Update the sponsored tokens list
+		function updateSponsoredTokensList() {
+			// Get all sponsored tokens
+			const allSponsoredTokens = sponsorService.getAllSponsoredTokens();
+			
+			// Filter to show only user's tokens if connected
+			const sponsoredTokens = userAddress 
+				? allSponsoredTokens.filter(token => 
+					token.activeSponsorships.some(s => s.userAddress === userAddress))
+				: [];
+			
+			// Clear the list
+			sponsoredTokensList.innerHTML = '';
+			
+			// Add sponsored tokens
+			if (sponsoredTokens.length > 0) {
+				sponsoredTokens.forEach(token => {
+					const symbol = token.tokenData.baseToken?.symbol || token.tokenData.symbol || 'UNKNOWN';
+					
+					// Find only this user's sponsorships
+					const userSponsorships = token.activeSponsorships.filter(s => s.userAddress === userAddress);
+					
+					// Calculate user's total size boost
+					const userSizeBoost = userSponsorships.reduce((total, s) => total + (s.sizeMultiplier - 1), 1).toFixed(1);
+					
+					// Find the earliest expiry for this user
+					const now = Date.now();
+					const timeRemaining = Math.min(...userSponsorships.map(s => s.expiresAt - now));
+					const hoursRemaining = Math.floor(timeRemaining / (1000 * 60 * 60));
+					const minutesRemaining = Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60));
+					
+					// Create token element
+					const tokenElement = document.createElement('div');
+					tokenElement.className = 'sponsored-token';
+					tokenElement.innerHTML = `
+						<div class="token-icon">${symbol.charAt(0)}</div>
+						<div class="token-info">
+							<div><strong class="gold">${symbol}</strong></div>
+							<div>Your Size Boost: ${userSizeBoost}x</div>
+							<div>Expires in: ${hoursRemaining}h ${minutesRemaining}m</div>
+							<div>Your Sponsorships: ${userSponsorships.length}</div>
+						</div>
+					`;
+					
+					sponsoredTokensList.appendChild(tokenElement);
+				});
+			} else {
+				sponsoredTokensList.innerHTML = '<p>No sponsored tokens yet.</p>';
+			}
+		}
+		
+		// Log an event
+		function logEvent(message, type = 'info') {
+			const logEntry = document.createElement('div');
+			logEntry.className = `log-entry ${type}`;
+			logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+			logArea.appendChild(logEntry);
+			logArea.scrollTop = logArea.scrollHeight;
+		}
+		
+		// Shorten address for display
+		function shortenAddress(address) {
+			if (!address) return '';
+			return address.substring(0, 6) + '...' + address.substring(address.length - 4);
+		}
+		
+		// Set up timer to update the list every minute
+		setInterval(updateSponsoredTokensList, 60 * 1000);
+		
+		// Log initialization
+		logEvent('Sponsored Token Test initialized', 'info');
+		
+		// Check if Phantom is installed
+		if (walletService.isPhantomInstalled()) {
+			logEvent('Phantom wallet detected', 'info');
+		} else {
+			logEvent('Phantom wallet not detected. Please install it to continue.', 'warning');
+		}
+	</script>
+</body>
+</html> 

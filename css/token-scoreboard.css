@@ -98,7 +98,7 @@
 	justify-content: center;
 	cursor: pointer;
 	transition: all 0.3s ease;
-	background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.4), transparent);
+	background: radial-gradient(circle at 30% 30%, rgb(255, 255, 255));
 	box-shadow: 0 0 10px rgba(100, 100, 255, 0.5);
 }
 
@@ -112,7 +112,7 @@
 	border-radius: 50%;
 	background: linear-gradient(45deg, #00ccff, #ff00cc);
 	z-index: -1;
-	opacity: 0.7;
+	/* opacity: 0.7; */
 	animation: rotate 10s linear infinite;
 }
 
@@ -127,43 +127,43 @@
 
 /* Individual planet types */
 .planet-website {
-	background-color: rgba(0, 200, 255, 0.5);
+	background-color: rgba(0, 200, 255, 1);
 }
 
 .planet-twitter {
-	background-color: rgba(29, 161, 242, 0.5);
+	background-color: rgba(29, 161, 242, 1);
 }
 
 .planet-telegram {
-	background-color: rgba(0, 136, 204, 0.5);
+	background-color: rgba(0, 136, 204, 1);
 }
 
 .planet-discord {
-	background-color: rgba(114, 137, 218, 0.5);
+	background-color: rgba(114, 137, 218, 1);
 }
 
 .planet-github {
-	background-color: rgba(36, 41, 46, 0.5);
+	background-color: rgba(36, 41, 46, 1);
 }
 
 .planet-medium {
-	background-color: rgba(0, 0, 0, 0.5);
+	background-color: rgba(0, 0, 0, 1);
 }
 
 .planet-youtube {
-	background-color: rgba(255, 0, 0, 0.5);
+	background-color: rgba(255, 0, 0, 1);
 }
 
 .planet-facebook {
-	background-color: rgba(66, 103, 178, 0.5);
+	background-color: rgba(66, 103, 178, 1);
 }
 
 .planet-instagram {
-	background-color: rgba(225, 48, 108, 0.5);
+	background-color: rgba(225, 48, 108, 1);
 }
 
 .planet-reddit {
-	background-color: rgba(255, 69, 0, 0.5);
+	background-color: rgba(255, 69, 0, 1);
 }
 
 /* Animations */

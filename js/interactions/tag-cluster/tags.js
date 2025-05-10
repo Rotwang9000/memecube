@@ -111,6 +111,8 @@ export class TagsManager {
 		console.error('Failed to recover VisualizationManager reference');
 		return null;
 	}
+
+
 	
 	/**
 	 * Add a new tag
@@ -132,7 +134,8 @@ export class TagsManager {
 		const tag = this.tagManager.createTag(tagText, url, {
 			scale: finalSize,
 			size: 0.5, // Base text size before scaling
-			source: metadata.source || 'userAdded'
+			source: metadata.source || 'userAdded', 
+			chainId: tokenData?.chainId
 		}, tokenData);
 		
 		// Ensure the tagManager has a visualization manager reference

@@ -6,6 +6,7 @@ import { Utils } from './utils/utils.js';
 import { VisualizationManager } from './ui/VisualizationManager.js';
 import { DexScreenerProvider } from './data-providers/DexScreenerProvider.js';
 import { getTokenKey } from './utils/tokenKey.js';
+import { SponsoredTokenUI } from './ui/SponsoredTokenUI.js';
 
 class MemeCube {
 	constructor() {
@@ -16,6 +17,7 @@ class MemeCube {
 		this.utils = new Utils();
 		this.visualizationManager = null;
 		this.dataProvider = null;
+		this.sponsoredTokenUI = null;
 		this.demoMode = false;
 		this.demoInterval = null;
 		this.clock = new THREE.Clock();
@@ -58,6 +60,9 @@ class MemeCube {
 		// Initialize visualization module first to get token data
 		await this.initVisualizations(true);
 		
+		// Initialize the sponsored token UI with the data provider
+		this.sponsoredTokenUI = new SponsoredTokenUI(this.dataProvider);
+		
 		// Now that visualizationManager is created, connect it to the tagsManager
 		if (this.visualizationManager) {
 			console.log('Connecting VisualizationManager to TagManager');
@@ -72,7 +77,6 @@ class MemeCube {
 		
 		// Add information button
 		this.setupInfoButton();
-		
 		
 		// Add mouse event listeners for interaction
 		this.setupMouseEvents();
